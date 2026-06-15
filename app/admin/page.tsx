@@ -26,8 +26,8 @@ export default function AdminDashboard() {
     async function init() {
       const { data: { user } } = await supabase.auth.getUser()
       if (!user) { router.replace('/auth/signin'); return }
-      if (user.email !== SUPER_ADMIN_EMAIL) { setUserEmail(user.email); setLoading(false); return }
-      setUserEmail(user.email)
+      if (user.email !== SUPER_ADMIN_EMAIL) { setUserEmail(user.email ?? null); setLoading(false); return }
+      setUserEmail(user.email ?? null)
 
       // Fetch stats
       try {
