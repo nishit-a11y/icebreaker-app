@@ -10,10 +10,10 @@ export default function HomePage() {
           <span className="text-white font-bold text-xl tracking-tight">IceBreak</span>
         </div>
         <div className="flex items-center gap-3">
-          <Link href="/sign-in" className="text-white/80 hover:text-white text-sm font-medium transition-colors">
+          <Link href="/auth/signin" className="text-white/80 hover:text-white text-sm font-medium transition-colors">
             Host login
           </Link>
-          <Link href="/sign-up" className="bg-white text-purple-700 px-4 py-2 rounded-lg text-sm font-semibold hover:bg-white/90 transition-colors">
+          <Link href="/auth/signup" className="bg-white text-purple-700 px-4 py-2 rounded-lg text-sm font-semibold hover:bg-white/90 transition-colors">
             Get started free
           </Link>
         </div>
@@ -36,7 +36,7 @@ export default function HomePage() {
 
         <div className="flex flex-col sm:flex-row gap-4 items-center">
           <Link
-            href="/sign-up"
+            href="/auth/signup"
             className="bg-yellow-400 hover:bg-yellow-300 text-gray-900 font-bold px-8 py-4 rounded-xl text-lg transition-all hover:scale-105 shadow-lg shadow-yellow-400/30"
           >
             🎮 Host a session free
@@ -107,7 +107,7 @@ export default function HomePage() {
               </div>
             ))}
           </div>
-          <Link href="/sign-up" className="inline-block mt-8 bg-white text-purple-700 font-bold px-6 py-3 rounded-xl hover:bg-white/90 transition-colors">
+          <Link href="/auth/signup" className="inline-block mt-8 bg-white text-purple-700 font-bold px-6 py-3 rounded-xl hover:bg-white/90 transition-colors">
             Start free — no credit card
           </Link>
         </div>

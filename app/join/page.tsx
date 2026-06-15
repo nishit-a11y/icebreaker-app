@@ -141,7 +141,7 @@ function JoinForm() {
 
         <p className="text-center text-white/40 text-xs mt-6">
           Hosting a session?{' '}
-          <a href="/sign-in" className="text-white/60 underline hover:text-white transition-colors">
+          <a href="/auth/signin" className="text-white/60 underline hover:text-white transition-colors">
             Sign in here
           </a>
         </p>
