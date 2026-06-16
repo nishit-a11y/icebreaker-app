@@ -1,5 +1,5 @@
 export type RoomStatus = 'waiting' | 'active' | 'ended'
-export type GamePhase = 'submitting' | 'waiting' | 'voting' | 'reveal' | 'ended'
+export type GamePhase = 'submitting' | 'waiting' | 'voting' | 'guessing' | 'reveal' | 'ended'
 export type GameEngine = 'submit-reveal' | 'vote' | 'round-robin' | 'timed'
 export type Plan = 'free' | 'team' | 'pro'
 

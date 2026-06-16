@@ -12,6 +12,7 @@ import type { GameSession, Participant } from '@/types'
 import SubmitRevealEngine from './SubmitRevealEngine'
 import VoteEngine from './VoteEngine'
 import RoundRobinEngine from './RoundRobinEngine'
+import TimedEngine from './TimedEngine'
 
 interface Props {
   gameSessionId: string
@@ -76,13 +77,15 @@ export default function GameRouter({ gameSessionId, participant, isHost, roomId 
     return <RoundRobinEngine {...commonProps} participants={allParticipants} />
   }
 
-  // Timed engine — simple timer-based UI (scaffold)
+  if (session.engine === 'timed') {
+    return <TimedEngine {...commonProps} participants={allParticipants} />
+  }
+
   return (
     <div className="max-w-lg mx-auto px-6 py-8 text-center">
       <div className="text-5xl mb-4">{game.emoji}</div>
       <h2 className="text-2xl font-bold text-white mb-2">{game.name}</h2>
       <p className="text-white/60">{game.description}</p>
-      <p className="text-white/30 text-sm mt-4">Timed engine — coming in next update</p>
     </div>
   )
 }

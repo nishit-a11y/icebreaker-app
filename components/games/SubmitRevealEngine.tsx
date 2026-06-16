@@ -1,18 +1,25 @@
 'use client'
 
 /**
- * Submit & Reveal Engine
- * Used by: Two Truths & One Lie, Finish the Sentence, Hot Take, Worst Advice Ever
+ * Submit & Reveal Engine — Self-Playing Edition
  *
- * Phases:
- *   submitting → (host advances) → reveal → ended
+ * Games: Two Truths & One Lie, Finish the Sentence, Hot Take,
+ *        Worst Advice Ever, Emoji Story
  *
- * Participants submit their answers anonymously.
- * Host reveals one-by-one, team votes on Two Truths lie-guessing.
+ * Flow (no host buttons required):
+ *   submitting  → everyone answers, auto-advances when all submit or 2min timeout
+ *   guessing    → show one answer anonymously, 15s timer, everyone taps who said it
+ *   reveal      → show author + scores, 4s auto-advance to next guessing round
+ *   ended       → leaderboard
+ *
+ * Scoring:
+ *   +2 for guessing correctly
+ *   +1 for being the author nobody guessed (sneaky bonus)
  */
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { supabase } from '@/lib/supabase'
+import { FINISH_THE_SENTENCE_PROMPTS } from '@/lib/questions'
 import type { GameSession, Submission, Participant } from '@/types'
 import type { GameConfig } from '@/lib/games'
 
@@ -24,16 +31,49 @@ interface Props {
   roomId: string
 }
 
+const GUESS_TIMER = 15   // seconds to guess
+const REVEAL_PAUSE = 4   // seconds to show reveal before advancing
+const SUBMIT_TIMEOUT = 120 // seconds max for submitting phase
+
+// Pull the prompt for finish-sentence from the bank using stored index
+function getPrompt(game: GameConfig, config: Record<string, unknown>): string {
+  if (game.questionBank === 'finish-sentence') {
+    const idx = (config.promptStartIndex as number ?? 0) % FINISH_THE_SENTENCE_PROMPTS.length
+    return FINISH_THE_SENTENCE_PROMPTS[idx]
+  }
+  return (game.prompt ?? '') as string
+}
+
+// Elapsed seconds since a stored ISO timestamp
+function elapsedSince(iso: string | undefined): number {
+  if (!iso) return 0
+  return Math.floor((Date.now() - new Date(iso as string).getTime()) / 1000)
+}
+
 export default function SubmitRevealEngine({ session, game, participant, isHost, roomId }: Props) {
   const [submissions, setSubmissions] = useState<Submission[]>([])
-  const [mySubmission, setMySubmission] = useState<Submission | null>(null)
+  const [allParticipants, setAllParticipants] = useState<Participant[]>([])
   const [fieldValues, setFieldValues] = useState<Record<string, string>>({})
+  const [mySubmission, setMySubmission] = useState<Submission | null>(null)
   const [submitting, setSubmitting] = useState(false)
-  const [voted, setVoted] = useState<string | null>(null)
-  const [revealIndex, setRevealIndex] = useState(0)
+  const [myGuess, setMyGuess] = useState<string | null>(null)   // participantId guessed
+  const [timeLeft, setTimeLeft] = useState(GUESS_TIMER)
+  const advancedRef = useRef(false)  // prevent double-advance from timer race
 
-  // Load submissions in realtime
+  const cfg = session.config as Record<string, unknown>
+  const scores = (cfg.scores ?? {}) as Record<string, number>
+  const currentIdx = (cfg.currentSubmissionIndex as number) ?? 0
+  const phase = session.phase
+  const prompt = getPrompt(game, cfg)
+
+  // Non-host players (the ones who submit answers)
+  const players = allParticipants.filter(p => !p.is_host)
+
+  // ── Load participants + submissions ──────────────────────────────────────
   useEffect(() => {
+    supabase.from('ib_participants').select('*').eq('room_id', roomId).order('joined_at')
+      .then(({ data }) => { if (data) setAllParticipants(data) })
+
     const fetchSubs = async () => {
       const { data } = await supabase
         .from('ib_submissions')
@@ -42,49 +82,202 @@ export default function SubmitRevealEngine({ session, game, participant, isHost,
         .order('submitted_at', { ascending: true })
       if (data) {
         setSubmissions(data)
-        const mine = data.find(s => s.participant_id === participant.id)
+        const mine = data.find(s =>
+          s.participant_id === participant.id && s.round_number !== -1
+        )
         if (mine) setMySubmission(mine)
+
+        // Check if I already guessed this round
+        const myGuessRec = data.find(s =>
+          s.participant_id === participant.id &&
+          s.round_number === -1 &&
+          (s.content as Record<string, unknown>).submissionIdx === currentIdx
+        )
+        if (myGuessRec) {
+          setMyGuess((myGuessRec.content as Record<string, unknown>).guessedParticipantId as string)
+        }
       }
     }
     fetchSubs()
 
     const channel = supabase
-      .channel(`submissions-${session.id}`)
+      .channel(`sre-${session.id}`)
       .on('postgres_changes', {
-        event: 'INSERT',
-        schema: 'public',
-        table: 'ib_submissions',
+        event: 'INSERT', schema: 'public', table: 'ib_submissions',
         filter: `game_session_id=eq.${session.id}`,
       }, (payload) => {
-        setSubmissions(prev => [...prev, payload.new as Submission])
-      })
-      .on('postgres_changes', {
-        event: 'UPDATE',
-        schema: 'public',
-        table: 'ib_submissions',
-        filter: `game_session_id=eq.${session.id}`,
-      }, (payload) => {
-        setSubmissions(prev => prev.map(s => s.id === (payload.new as Submission).id ? payload.new as Submission : s))
+        setSubmissions(prev => {
+          const newSubs = [...prev, payload.new as Submission]
+          // Auto-advance submitting → guessing when all players have answered
+          if (phase === 'submitting') {
+            const answers = newSubs.filter(s => s.round_number !== -1)
+            if (answers.length >= players.length && players.length > 0) {
+              advanceToGuessing(answers, 0)
+            }
+          }
+          return newSubs
+        })
       })
       .subscribe()
 
     return () => { supabase.removeChannel(channel) }
-  }, [session.id, participant.id])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session.id, roomId, currentIdx])
 
-  async function submitAnswers() {
-    if (!game.fields?.some((_, i) => fieldValues[i])) return
+  // Reset guess when phase or currentIdx changes
+  useEffect(() => {
+    setMyGuess(null)
+    advancedRef.current = false
+  }, [phase, currentIdx])
+
+  // ── Guess countdown timer ─────────────────────────────────────────────────
+  useEffect(() => {
+    if (phase !== 'guessing') return
+    const phaseStart = cfg.phaseStartedAt as string | undefined
+    const tick = () => {
+      const elapsed = elapsedSince(phaseStart)
+      const remaining = Math.max(0, GUESS_TIMER - elapsed)
+      setTimeLeft(remaining)
+      if (remaining === 0 && !advancedRef.current) {
+        advancedRef.current = true
+        advanceToReveal()
+      }
+    }
+    tick()
+    const id = setInterval(tick, 500)
+    return () => clearInterval(id)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase, cfg.phaseStartedAt])
+
+  // ── Submitting phase timeout (120s fallback) ──────────────────────────────
+  useEffect(() => {
+    if (phase !== 'submitting') return
+    const phaseStart = cfg.phaseStartedAt as string | undefined
+    const elapsed = elapsedSince(phaseStart)
+    const remaining = Math.max(0, SUBMIT_TIMEOUT - elapsed)
+    if (remaining === 0) {
+      const answers = submissions.filter(s => s.round_number !== -1)
+      if (answers.length > 0 && !advancedRef.current) {
+        advancedRef.current = true
+        advanceToGuessing(answers, 0)
+      }
+      return
+    }
+    const id = setTimeout(() => {
+      const answers = submissions.filter(s => s.round_number !== -1)
+      if (answers.length > 0 && !advancedRef.current) {
+        advancedRef.current = true
+        advanceToGuessing(answers, 0)
+      }
+    }, remaining * 1000)
+    return () => clearTimeout(id)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase, cfg.phaseStartedAt])
+
+  // ── Reveal auto-advance after REVEAL_PAUSE seconds ───────────────────────
+  useEffect(() => {
+    if (phase !== 'reveal') return
+    const id = setTimeout(() => {
+      if (advancedRef.current) return
+      advancedRef.current = true
+      const answers = submissions.filter(s => s.round_number !== -1)
+      const nextIdx = currentIdx + 1
+      if (nextIdx >= answers.length) {
+        endGame()
+      } else {
+        goToNextGuessing(nextIdx)
+      }
+    }, REVEAL_PAUSE * 1000)
+    return () => clearTimeout(id)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase, currentIdx])
+
+  // ── DB helpers ────────────────────────────────────────────────────────────
+  const advanceToGuessing = useCallback(async (answers: Submission[], idx: number) => {
+    await supabase.from('ib_game_sessions')
+      .update({
+        phase: 'guessing',
+        config: { ...cfg, currentSubmissionIndex: idx, phaseStartedAt: new Date().toISOString() },
+      })
+      .eq('id', session.id)
+      .eq('phase', 'submitting')  // idempotent — only one client wins
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session.id, cfg])
+
+  const goToNextGuessing = useCallback(async (idx: number) => {
+    await supabase.from('ib_game_sessions')
+      .update({
+        phase: 'guessing',
+        config: { ...cfg, currentSubmissionIndex: idx, phaseStartedAt: new Date().toISOString() },
+      })
+      .eq('id', session.id)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session.id, cfg])
+
+  const advanceToReveal = useCallback(async () => {
+    // Calculate scores from guesses for this submission
+    const answers = submissions.filter(s => s.round_number !== -1)
+    const currentSub = answers[currentIdx]
+    if (!currentSub) return
+
+    const guessRecords = submissions.filter(s =>
+      s.round_number === -1 &&
+      (s.content as Record<string, unknown>).submissionIdx === currentIdx
+    )
+
+    const newScores = { ...scores }
+    let anyCorrect = false
+    for (const g of guessRecords) {
+      const guessed = (g.content as Record<string, unknown>).guessedParticipantId as string
+      // Two Truths: guess which field index is the lie
+      if (game.id === 'two-truths') {
+        const guessedField = (g.content as Record<string, unknown>).guessedFieldIndex as number
+        const lieField = game.fields?.findIndex(f => f.isLie) ?? 2
+        if (guessedField === lieField) {
+          newScores[g.participant_id] = (newScores[g.participant_id] ?? 0) + 2
+          anyCorrect = true
+        }
+      } else {
+        if (guessed === currentSub.participant_id) {
+          newScores[g.participant_id] = (newScores[g.participant_id] ?? 0) + 2
+          anyCorrect = true
+        }
+      }
+    }
+    // Sneaky bonus: nobody guessed you
+    if (!anyCorrect && currentSub.participant_id) {
+      newScores[currentSub.participant_id] = (newScores[currentSub.participant_id] ?? 0) + 1
+    }
+
+    await supabase.from('ib_game_sessions')
+      .update({
+        phase: 'reveal',
+        config: { ...cfg, currentSubmissionIndex: currentIdx, scores: newScores, phaseStartedAt: new Date().toISOString() },
+      })
+      .eq('id', session.id)
+      .eq('phase', 'guessing')
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session.id, cfg, submissions, currentIdx, scores, game])
+
+  const endGame = useCallback(async () => {
+    await supabase.from('ib_game_sessions').update({ phase: 'ended' }).eq('id', session.id)
+    await supabase.from('ib_rooms').update({ status: 'waiting', current_game_id: null }).eq('id', roomId)
+  }, [session.id, roomId])
+
+  // ── Submit answer ─────────────────────────────────────────────────────────
+  async function submitAnswer() {
+    if (!game.fields?.some((_, i) => fieldValues[i]?.trim())) return
     setSubmitting(true)
     try {
       const content: Record<string, string> = {}
       game.fields?.forEach((f, i) => { content[`field_${i}`] = fieldValues[i] || '' })
-      if (game.prompt) content.prompt = game.prompt
+      if (prompt) content.prompt = prompt
 
       const { data, error } = await supabase.from('ib_submissions').insert({
         game_session_id: session.id,
         participant_id: participant.id,
         content,
-        is_lie: false, // will be set by host during reveal for Two Truths
-        round_number: session.round_number,
+        round_number: 1,
       }).select().single()
 
       if (!error && data) setMySubmission(data)
@@ -93,92 +286,97 @@ export default function SubmitRevealEngine({ session, game, participant, isHost,
     }
   }
 
-  async function voteForLie(submissionId: string, fieldIndex: number) {
-    if (voted || !mySubmission) return
-    const key = `${submissionId}-${fieldIndex}`
-    setVoted(key)
+  // ── Submit guess ──────────────────────────────────────────────────────────
+  async function submitGuess(guessedParticipantId: string, guessedFieldIndex?: number) {
+    if (myGuess) return
+    setMyGuess(guessedParticipantId)
+    await supabase.from('ib_submissions').insert({
+      game_session_id: session.id,
+      participant_id: participant.id,
+      content: {
+        type: 'guess',
+        submissionIdx: currentIdx,
+        guessedParticipantId,
+        ...(guessedFieldIndex !== undefined ? { guessedFieldIndex } : {}),
+      },
+      round_number: -1,
+    })
+    // Check if everyone has guessed
+    const totalGuessers = allParticipants.length // host can also guess
+    const guessCount = submissions.filter(s =>
+      s.round_number === -1 &&
+      (s.content as Record<string, unknown>).submissionIdx === currentIdx
+    ).length + 1 // +1 for this guess
 
-    await supabase.from('ib_submissions')
-      .update({ votes: [...(submissions.find(s => s.id === submissionId)?.votes || []), participant.id] })
-      .eq('id', submissionId)
-  }
-
-  async function advancePhase() {
-    const nextPhase = session.phase === 'submitting' ? 'reveal' : 'ended'
-    await supabase.from('ib_game_sessions')
-      .update({ phase: nextPhase })
-      .eq('id', session.id)
-
-    if (nextPhase === 'ended') {
-      await supabase.from('ib_rooms').update({ status: 'waiting', current_game_id: null }).eq('id', roomId)
+    if (guessCount >= totalGuessers && !advancedRef.current) {
+      advancedRef.current = true
+      await advanceToReveal()
     }
   }
 
-  const phase = session.phase
+  // ── Derived data ──────────────────────────────────────────────────────────
+  const answers = submissions.filter(s => s.round_number !== -1)
+  const currentSub = answers[currentIdx]
+  const currentAuthor = allParticipants.find(p => p.id === currentSub?.participant_id)
+  const guessRecords = submissions.filter(s =>
+    s.round_number === -1 &&
+    (s.content as Record<string, unknown>).submissionIdx === currentIdx
+  )
+  const guessCount = guessRecords.length
+  const totalGuessers = allParticipants.length
 
-  // ── Submitting phase ─────────────────────────────────────────────────────
+  // Sorted leaderboard
+  const leaderboard = [...allParticipants]
+    .filter(p => !p.is_host)
+    .map(p => ({ ...p, score: scores[p.id] ?? 0 }))
+    .sort((a, b) => b.score - a.score)
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // RENDER
+  // ══════════════════════════════════════════════════════════════════════════
+
+  // ── SUBMITTING ────────────────────────────────────────────────────────────
   if (phase === 'submitting') {
-    if (isHost) {
+    const submitCount = answers.length
+    const totalPlayers = players.length
+
+    if (mySubmission || isHost) {
       return (
         <div className="flex flex-col items-center justify-center min-h-[60vh] text-center px-6">
-          <div className="text-6xl mb-4">{game.emoji}</div>
-          <h2 className="text-2xl font-bold text-white mb-2">{game.name}</h2>
-          <p className="text-white/60 mb-8">{game.description}</p>
-
-          <div className="bg-white/10 border border-white/20 rounded-2xl p-6 mb-8 w-full max-w-md">
-            <p className="text-white/50 text-sm mb-2">Players submitting...</p>
-            <div className="text-5xl font-bold text-white">{submissions.length}</div>
-            <p className="text-white/40 text-xs mt-1">of team submitted</p>
-
-            {/* Submission list (names hidden) */}
-            <div className="flex flex-wrap gap-2 mt-4 justify-center">
-              {submissions.map((_, i) => (
-                <div key={i} className="w-3 h-3 rounded-full bg-green-400" />
-              ))}
-            </div>
-          </div>
-
-          {game.prompt && (
-            <div className="bg-yellow-400/10 border border-yellow-400/30 rounded-xl px-6 py-4 mb-6 text-yellow-300 font-semibold text-lg max-w-md">
-              "{game.prompt}"
-            </div>
+          <div className="text-5xl mb-4">{isHost ? game.emoji : '✅'}</div>
+          <h2 className="text-xl font-bold text-white mb-2">
+            {isHost ? `Waiting for answers…` : 'Submitted!'}
+          </h2>
+          {prompt && !isHost && (
+            <p className="text-yellow-300/80 text-sm mb-4 max-w-xs">"{prompt}"</p>
           )}
-
-          <button
-            onClick={advancePhase}
-            disabled={submissions.length === 0}
-            className="bg-purple-500 hover:bg-purple-400 disabled:opacity-40 text-white font-bold px-8 py-4 rounded-xl text-lg transition-colors"
-          >
-            Reveal answers →
-          </button>
-        </div>
-      )
-    }
-
-    // Participant submit view
-    if (mySubmission) {
-      return (
-        <div className="flex flex-col items-center justify-center min-h-[60vh] text-center px-6">
-          <div className="text-5xl mb-4">✅</div>
-          <h2 className="text-xl font-bold text-white mb-2">Submitted!</h2>
-          <p className="text-white/60">Waiting for everyone else...</p>
-          <div className="flex gap-1 mt-6">
-            {[0,1,2].map(i => (
-              <div key={i} className="w-2 h-2 rounded-full bg-purple-400 animate-bounce" style={{ animationDelay: `${i*150}ms` }} />
-            ))}
+          <p className="text-white/50 text-sm mb-4">
+            {submitCount} of {totalPlayers} answered
+          </p>
+          <div className="flex gap-1.5 flex-wrap justify-center max-w-xs">
+            {players.map((p) => {
+              const submitted = answers.some(s => s.participant_id === p.id)
+              return (
+                <div
+                  key={p.id}
+                  className={`w-2.5 h-2.5 rounded-full transition-colors ${submitted ? 'bg-green-400' : 'bg-white/20'}`}
+                />
+              )
+            })}
           </div>
+          <p className="text-white/30 text-xs mt-6">Game starts automatically when everyone answers</p>
         </div>
       )
     }
 
     return (
       <div className="max-w-lg mx-auto px-6 py-8">
-        <div className="text-center mb-8">
+        <div className="text-center mb-6">
           <div className="text-4xl mb-3">{game.emoji}</div>
           <h2 className="text-2xl font-bold text-white">{game.name}</h2>
-          {game.prompt && (
-            <div className="mt-4 bg-yellow-400/10 border border-yellow-400/30 rounded-xl px-5 py-3 text-yellow-300 font-semibold">
-              "{game.prompt}"
+          {prompt && (
+            <div className="mt-4 bg-yellow-400/10 border border-yellow-400/30 rounded-xl px-5 py-3 text-yellow-300 font-semibold text-sm">
+              "{prompt}"
             </div>
           )}
         </div>
@@ -199,107 +397,278 @@ export default function SubmitRevealEngine({ session, game, participant, isHost,
         </div>
 
         <button
-          onClick={submitAnswers}
+          onClick={submitAnswer}
           disabled={submitting || !game.fields?.some((_, i) => fieldValues[i]?.trim())}
           className="w-full mt-6 bg-yellow-400 hover:bg-yellow-300 disabled:opacity-40 text-gray-900 font-bold py-4 rounded-xl transition-colors"
         >
-          {submitting ? 'Submitting...' : 'Submit ✓'}
+          {submitting ? 'Submitting…' : 'Submit ✓'}
         </button>
+
+        <p className="text-center text-white/30 text-xs mt-4">
+          {submitCount} of {totalPlayers} answered
+        </p>
       </div>
     )
   }
 
-  // ── Reveal phase ──────────────────────────────────────────────────────────
-  if (phase === 'reveal') {
-    const current = submissions[revealIndex]
+  // ── GUESSING ──────────────────────────────────────────────────────────────
+  if (phase === 'guessing') {
+    const timerPct = (timeLeft / GUESS_TIMER) * 100
+    const timerColor = timeLeft <= 5 ? 'bg-red-500' : timeLeft <= 10 ? 'bg-yellow-400' : 'bg-green-400'
+    const answerCount = answers.length
 
     return (
-      <div className="max-w-2xl mx-auto px-6 py-8">
-        <div className="text-center mb-6">
-          <div className="text-4xl mb-2">{game.emoji}</div>
-          <h2 className="text-xl font-bold text-white">{game.name}</h2>
-          <p className="text-white/40 text-sm mt-1">{revealIndex + 1} of {submissions.length}</p>
+      <div className="max-w-lg mx-auto px-4 py-6">
+        {/* Header */}
+        <div className="text-center mb-4">
+          <p className="text-white/40 text-xs uppercase tracking-widest mb-1">
+            {currentIdx + 1} of {answerCount}
+          </p>
+          <h2 className="text-lg font-bold text-white">{game.name}</h2>
         </div>
 
-        {current && (
-          <div className="bg-white/10 border border-white/20 rounded-2xl p-6 mb-6">
-            {/* Anonymous until reveal */}
-            <p className="text-white/50 text-xs uppercase tracking-widest mb-4">Someone said...</p>
+        {/* Timer bar */}
+        <div className="h-2 bg-white/10 rounded-full mb-4 overflow-hidden">
+          <div
+            className={`h-full rounded-full transition-all ${timerColor}`}
+            style={{ width: `${timerPct}%` }}
+          />
+        </div>
+        <p className="text-center text-white font-bold text-2xl mb-4">{timeLeft}s</p>
 
-            {game.fields?.map((field, i) => (
-              <div key={i} className="mb-4">
-                <p className="text-white/50 text-xs mb-1">{field.label}</p>
-                {/* For Two Truths voting: each field is a clickable option */}
-                {game.id === 'two-truths' && !isHost ? (
+        {/* The anonymous answer */}
+        {currentSub && (
+          <div className="bg-white/10 border border-white/20 rounded-2xl p-5 mb-5">
+            <p className="text-white/40 text-xs uppercase tracking-widest mb-3">Who said this?</p>
+            {prompt && (
+              <p className="text-yellow-300/70 text-xs mb-2 italic">"{prompt}"</p>
+            )}
+            {game.fields?.map((field, i) => {
+              const val = (currentSub.content as Record<string, string>)[`field_${i}`]
+              if (!val) return null
+
+              // Two Truths: each field is a tappable lie-guess
+              if (game.id === 'two-truths') {
+                const isGuessed = myGuess !== null &&
+                  (currentSub.content as Record<string, unknown>)[`field_${i}`] !== undefined
+                return (
                   <button
-                    onClick={() => voteForLie(current.id, i)}
-                    disabled={!!voted}
-                    className={`w-full text-left bg-white/5 hover:bg-white/15 border rounded-xl px-4 py-3 text-white transition-colors ${
-                      voted === `${current.id}-${i}` ? 'border-yellow-400 bg-yellow-400/10' : 'border-white/20'
+                    key={i}
+                    onClick={() => !myGuess && submitGuess(currentSub.participant_id, i)}
+                    disabled={!!myGuess}
+                    className={`w-full text-left rounded-xl px-4 py-3 mb-2 border transition-colors text-sm ${
+                      myGuess !== null && (submissions.find(s =>
+                        s.participant_id === participant.id && s.round_number === -1 &&
+                        (s.content as Record<string, unknown>).guessedFieldIndex === i
+                      )) ? 'border-yellow-400 bg-yellow-400/10 text-white' :
+                      myGuess ? 'border-white/10 bg-white/5 text-white/60' :
+                      'border-white/20 bg-white/5 text-white hover:bg-white/15 hover:border-white/40 cursor-pointer'
                     }`}
                   >
-                    {(current.content as Record<string, string>)[`field_${i}`]}
+                    <span className="text-white/40 text-xs mr-2">{['A', 'B', 'C'][i]}</span>
+                    {val}
                   </button>
-                ) : (
-                  <p className="text-white text-lg font-medium bg-white/5 border border-white/20 rounded-xl px-4 py-3">
-                    {(current.content as Record<string, string>)[`field_${i}`]}
-                  </p>
-                )}
-              </div>
-            ))}
+                )
+              }
 
-            {game.id === 'two-truths' && !isHost && !voted && (
-              <p className="text-yellow-400 text-sm text-center mt-2">👆 Tap the one you think is the lie!</p>
-            )}
+              return (
+                <p key={i} className="text-white text-base font-medium leading-relaxed">{val}</p>
+              )
+            })}
           </div>
         )}
 
-        {isHost && (
-          <div className="flex gap-3">
-            {revealIndex > 0 && (
-              <button
-                onClick={() => setRevealIndex(i => i - 1)}
-                className="flex-1 bg-white/10 hover:bg-white/20 text-white font-semibold py-3 rounded-xl transition-colors"
-              >
-                ← Previous
-              </button>
-            )}
-            {revealIndex < submissions.length - 1 ? (
-              <button
-                onClick={() => setRevealIndex(i => i + 1)}
-                className="flex-1 bg-purple-500 hover:bg-purple-400 text-white font-bold py-3 rounded-xl transition-colors"
-              >
-                Next →
-              </button>
-            ) : (
-              <button
-                onClick={advancePhase}
-                className="flex-1 bg-green-500 hover:bg-green-400 text-white font-bold py-3 rounded-xl transition-colors"
-              >
-                End game 🎉
-              </button>
-            )}
+        {/* Name grid — tap who you think said it (not shown for Two Truths) */}
+        {game.id !== 'two-truths' && (
+          <div>
+            <p className="text-white/50 text-xs text-center mb-3">
+              {myGuess ? `You guessed! (${guessCount}/${totalGuessers} in)` : 'Tap who you think said it'}
+            </p>
+            <div className="grid grid-cols-2 gap-2">
+              {players.map(p => {
+                const isMe = p.id === participant.id
+                const isGuessed = myGuess === p.id
+                return (
+                  <button
+                    key={p.id}
+                    onClick={() => !myGuess && submitGuess(p.id)}
+                    disabled={!!myGuess || isMe}
+                    className={`py-3 px-4 rounded-xl text-sm font-medium transition-all border ${
+                      isGuessed ? 'bg-purple-500 border-purple-400 text-white scale-95' :
+                      isMe ? 'bg-white/5 border-white/10 text-white/30 cursor-default' :
+                      myGuess ? 'bg-white/5 border-white/10 text-white/50' :
+                      'bg-white/10 border-white/20 text-white hover:bg-white/20 hover:border-white/40 cursor-pointer'
+                    }`}
+                  >
+                    {p.display_name}
+                    {isMe && <span className="text-white/30 text-xs ml-1">(you)</span>}
+                  </button>
+                )
+              })}
+            </div>
           </div>
         )}
 
-        {!isHost && (
-          <p className="text-center text-white/40 text-sm">Host is revealing answers on screen</p>
+        {game.id === 'two-truths' && myGuess && (
+          <p className="text-center text-white/50 text-sm mt-2">
+            Locked in! ({guessCount}/{totalGuessers} guessed)
+          </p>
         )}
       </div>
     )
   }
 
-  // ── Ended ─────────────────────────────────────────────────────────────────
-  return (
-    <div className="flex flex-col items-center justify-center min-h-[60vh] text-center px-6">
-      <div className="text-6xl mb-4">🎉</div>
-      <h2 className="text-2xl font-bold text-white mb-2">That's a wrap!</h2>
-      <p className="text-white/60">Hope you learned something new about your team.</p>
-      {isHost && (
-        <a href="/host" className="mt-8 bg-purple-500 hover:bg-purple-400 text-white font-bold px-8 py-4 rounded-xl transition-colors">
-          Play another game
-        </a>
-      )}
-    </div>
-  )
+  // ── REVEAL ────────────────────────────────────────────────────────────────
+  if (phase === 'reveal') {
+    const latestScores = (session.config as Record<string, unknown>).scores as Record<string, number> ?? {}
+    const correctGuessers = guessRecords.filter(g => {
+      if (game.id === 'two-truths') {
+        const lieIdx = game.fields?.findIndex(f => f.isLie) ?? 2
+        return (g.content as Record<string, unknown>).guessedFieldIndex === lieIdx
+      }
+      return (g.content as Record<string, unknown>).guessedParticipantId === currentSub?.participant_id
+    })
+
+    return (
+      <div className="max-w-lg mx-auto px-4 py-6">
+        <div className="text-center mb-4">
+          <p className="text-white/40 text-xs uppercase tracking-widest mb-1">
+            {currentIdx + 1} of {answers.length}
+          </p>
+          <p className="text-green-400 text-sm font-semibold">Revealed!</p>
+        </div>
+
+        {currentSub && currentAuthor && (
+          <div className="bg-white/10 border border-white/20 rounded-2xl p-5 mb-5">
+            <div className="flex items-center gap-3 mb-4 pb-3 border-b border-white/10">
+              <div className="w-10 h-10 rounded-full bg-gradient-to-br from-purple-400 to-pink-400 flex items-center justify-center text-white font-bold text-lg">
+                {currentAuthor.display_name[0]}
+              </div>
+              <div>
+                <p className="text-white font-bold">{currentAuthor.display_name}</p>
+                <p className="text-white/40 text-xs">said this 👇</p>
+              </div>
+            </div>
+
+            {game.fields?.map((field, i) => {
+              const val = (currentSub.content as Record<string, string>)[`field_${i}`]
+              if (!val) return null
+              const isLie = game.id === 'two-truths' && field.isLie
+              return (
+                <div key={i} className={`mb-2 rounded-lg px-3 py-2 ${isLie ? 'bg-red-500/20 border border-red-500/40' : ''}`}>
+                  {game.fields!.length > 1 && (
+                    <p className="text-white/40 text-xs mb-0.5">
+                      {field.label} {isLie ? '🎭 THE LIE' : ''}
+                    </p>
+                  )}
+                  <p className="text-white text-sm">{val}</p>
+                </div>
+              )
+            })}
+          </div>
+        )}
+
+        {/* Who guessed right */}
+        {correctGuessers.length > 0 ? (
+          <div className="bg-green-500/10 border border-green-500/30 rounded-xl p-4 mb-4">
+            <p className="text-green-400 text-xs font-bold uppercase tracking-widest mb-2">
+              🎯 Got it right (+2 pts)
+            </p>
+            <div className="flex flex-wrap gap-2">
+              {correctGuessers.map(g => {
+                const guesser = allParticipants.find(p => p.id === g.participant_id)
+                return guesser ? (
+                  <span key={g.id} className="bg-green-500/20 text-green-300 text-sm px-3 py-1 rounded-full">
+                    {guesser.display_name}
+                  </span>
+                ) : null
+              })}
+            </div>
+          </div>
+        ) : (
+          currentSub && (
+            <div className="bg-purple-500/10 border border-purple-500/30 rounded-xl p-4 mb-4">
+              <p className="text-purple-400 text-sm font-semibold">
+                😏 Nobody guessed {currentAuthor?.display_name}! +1 sneaky point
+              </p>
+            </div>
+          )
+        )}
+
+        {/* Mini scores */}
+        <div className="grid grid-cols-3 gap-2">
+          {leaderboard.slice(0, 6).map((p, i) => (
+            <div key={p.id} className="bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-center">
+              <p className="text-white/40 text-xs">{i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `#${i + 1}`}</p>
+              <p className="text-white text-xs font-medium truncate">{p.display_name.split(' ')[0]}</p>
+              <p className="text-purple-400 font-bold text-sm">{latestScores[p.id] ?? 0}</p>
+            </div>
+          ))}
+        </div>
+
+        <p className="text-center text-white/30 text-xs mt-4">Next answer in {REVEAL_PAUSE}s…</p>
+      </div>
+    )
+  }
+
+  // ── ENDED — Leaderboard ───────────────────────────────────────────────────
+  if (phase === 'ended') {
+    const finalScores = (session.config as Record<string, unknown>).scores as Record<string, number> ?? {}
+    const ranked = [...players]
+      .map(p => ({ ...p, score: finalScores[p.id] ?? 0 }))
+      .sort((a, b) => b.score - a.score)
+
+    const medals = ['🥇', '🥈', '🥉']
+
+    return (
+      <div className="max-w-lg mx-auto px-6 py-8">
+        <div className="text-center mb-8">
+          <div className="text-5xl mb-3">🎉</div>
+          <h2 className="text-2xl font-bold text-white">That's a wrap!</h2>
+          <p className="text-white/50 text-sm mt-1">Final scores</p>
+        </div>
+
+        <div className="space-y-3 mb-8">
+          {ranked.map((p, i) => {
+            const isMe = p.id === participant.id
+            return (
+              <div
+                key={p.id}
+                className={`flex items-center gap-4 rounded-2xl px-5 py-4 border transition-all ${
+                  i === 0 ? 'bg-yellow-400/10 border-yellow-400/40' :
+                  isMe ? 'bg-purple-500/10 border-purple-500/40' :
+                  'bg-white/5 border-white/10'
+                }`}
+              >
+                <span className="text-2xl w-8 text-center">{medals[i] ?? `#${i + 1}`}</span>
+                <div className="flex-1 min-w-0">
+                  <p className={`font-bold truncate ${i === 0 ? 'text-yellow-300' : 'text-white'}`}>
+                    {p.display_name}
+                    {isMe && <span className="text-white/40 font-normal text-xs ml-1">(you)</span>}
+                  </p>
+                </div>
+                <span className={`text-2xl font-black ${i === 0 ? 'text-yellow-400' : 'text-white'}`}>
+                  {p.score}
+                </span>
+              </div>
+            )
+          })}
+        </div>
+
+        {isHost && (
+          <a
+            href="/host"
+            className="block w-full text-center bg-purple-500 hover:bg-purple-400 text-white font-bold py-4 rounded-xl transition-colors"
+          >
+            Play another game
+          </a>
+        )}
+        {!isHost && (
+          <p className="text-center text-white/40 text-sm">Waiting for host to start another game…</p>
+        )}
+      </div>
+    )
+  }
+
+  return null
 }

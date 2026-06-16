@@ -15,11 +15,13 @@ export interface GameConfig {
   prompt?: string
   timerSeconds?: number
   rounds?: number
-  plans: ('free' | 'team' | 'pro')[] // which plans can access
+  questionBank?: 'wyr' | 'this-or-that' | 'finish-sentence' | 'who-in-the-room'
+  plans: ('free' | 'team' | 'pro')[]
   emoji: string
 }
 
 export const GAMES: GameConfig[] = [
+  // ── Submit & Reveal ────────────────────────────────────────────────────────
   {
     id: 'two-truths',
     name: 'Two Truths & One Lie',
@@ -39,20 +41,20 @@ export const GAMES: GameConfig[] = [
   {
     id: 'finish-sentence',
     name: 'Finish the Sentence',
-    description: 'Complete a prompt like "People are always surprised to learn I..."',
+    description: 'Complete a random prompt, then guess who wrote each answer.',
     engine: 'submit-reveal',
     category: 'reveal',
-    durationMinutes: 5,
+    durationMinutes: 6,
     minPlayers: 2,
     emoji: '✍️',
     plans: ['free', 'team', 'pro'],
-    prompt: 'People are always surprised to learn I...',
-    fields: [{ label: 'Your answer', placeholder: 'Complete the sentence...' }],
+    questionBank: 'finish-sentence',
+    fields: [{ label: 'Complete the sentence', placeholder: 'Your answer...' }],
   },
   {
     id: 'hot-take',
     name: 'Hot Take',
-    description: 'Everyone submits an unpopular opinion. Team votes whose is hottest.',
+    description: 'Submit an unpopular opinion. Everyone guesses who said it.',
     engine: 'submit-reveal',
     category: 'laugh',
     durationMinutes: 6,
@@ -64,7 +66,7 @@ export const GAMES: GameConfig[] = [
   {
     id: 'worst-advice',
     name: 'Worst Advice Ever',
-    description: 'Submit the worst advice you\'ve ever given or received. Team votes.',
+    description: "Share the worst advice you've given or received. Everyone guesses who said it.",
     engine: 'submit-reveal',
     category: 'laugh',
     durationMinutes: 6,
@@ -74,32 +76,69 @@ export const GAMES: GameConfig[] = [
     fields: [{ label: 'The terrible advice', placeholder: 'The worse the better...' }],
   },
   {
+    id: 'emoji-story',
+    name: 'Emoji Story',
+    description: 'Describe your weekend using only emojis. Everyone guesses who said what.',
+    engine: 'submit-reveal',
+    category: 'laugh',
+    durationMinutes: 5,
+    minPlayers: 2,
+    emoji: '😂',
+    plans: ['team', 'pro'],
+    fields: [{ label: 'Your emoji story (emojis only!)', placeholder: '😴☕🏃💻🍕😴' }],
+  },
+
+  // ── Vote ───────────────────────────────────────────────────────────────────
+  {
     id: 'would-you-rather',
     name: 'Would You Rather',
-    description: '5 rapid-fire dilemmas. Everyone votes. See how your team thinks.',
+    description: 'Rapid-fire dilemmas. Everyone votes — results auto-reveal on a timer.',
     engine: 'vote',
     category: 'compete',
-    durationMinutes: 4,
+    durationMinutes: 5,
     minPlayers: 2,
     emoji: '⚡',
     plans: ['free', 'team', 'pro'],
-    rounds: 5,
+    questionBank: 'wyr',
+    rounds: 7,
+    timerSeconds: 20,
   },
   {
-    id: 'gif-battle',
-    name: 'GIF Battle',
-    description: 'Find a GIF that best matches the prompt. Team votes for the best.',
+    id: 'who-in-the-room',
+    name: 'Who in the Room?',
+    description: '"Most likely to..." — tap who fits best. No right answers, only laughs.',
     engine: 'vote',
     category: 'laugh',
     durationMinutes: 5,
     minPlayers: 3,
-    emoji: '🎬',
-    plans: ['team', 'pro'],
+    emoji: '👀',
+    plans: ['free', 'team', 'pro'],
+    questionBank: 'who-in-the-room',
+    rounds: 7,
+    timerSeconds: 20,
   },
+
+  // ── Timed ──────────────────────────────────────────────────────────────────
+  {
+    id: 'this-or-that',
+    name: 'This or That',
+    description: 'Quick binary choices with a countdown. See how your team thinks.',
+    engine: 'timed',
+    category: 'compete',
+    durationMinutes: 4,
+    minPlayers: 2,
+    emoji: '⚖️',
+    plans: ['team', 'pro'],
+    questionBank: 'this-or-that',
+    timerSeconds: 15,
+    rounds: 10,
+  },
+
+  // ── Round Robin ────────────────────────────────────────────────────────────
   {
     id: 'hot-seat',
     name: 'Hot Seat',
-    description: 'One person on stage for 60 seconds. Team submits questions, they pick one to answer.',
+    description: 'One person on the spot. Team submits questions, they pick one to answer.',
     engine: 'round-robin',
     category: 'connect',
     durationMinutes: 8,
@@ -121,31 +160,6 @@ export const GAMES: GameConfig[] = [
       { label: 'What are you recommending?', placeholder: 'Book, show, restaurant, app...' },
       { label: 'Why?', placeholder: 'One sentence...' },
     ],
-  },
-  {
-    id: 'this-or-that',
-    name: 'This or That',
-    description: '10 binary choices in 20 seconds each. Coffee or Tea? Early bird or Night owl?',
-    engine: 'timed',
-    category: 'compete',
-    durationMinutes: 4,
-    minPlayers: 2,
-    emoji: '⚖️',
-    plans: ['team', 'pro'],
-    timerSeconds: 20,
-    rounds: 10,
-  },
-  {
-    id: 'emoji-story',
-    name: 'Emoji Story',
-    description: 'Describe your weekend or current mood using only emojis. Others guess.',
-    engine: 'timed',
-    category: 'laugh',
-    durationMinutes: 5,
-    minPlayers: 2,
-    emoji: '😂',
-    plans: ['team', 'pro'],
-    timerSeconds: 30,
   },
 ]
 

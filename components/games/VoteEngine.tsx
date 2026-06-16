@@ -1,32 +1,19 @@
 'use client'
 
 /**
- * Vote Engine
- * Used by: Would You Rather, GIF Battle
+ * Vote Engine — Self-Playing Edition
  *
- * Phases: submitting → voting → reveal → ended
- * For WYR: pre-loaded questions, everyone votes simultaneously
- * For GIF Battle: participants submit a GIF URL, everyone votes for best
+ * Games: Would You Rather, Who in the Room?
+ *
+ * Flow (no host buttons):
+ *   Each round: 20s countdown → everyone votes → auto-reveal → 5s pause → next round
  */
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { supabase } from '@/lib/supabase'
+import { WYR_QUESTIONS, WHO_IN_THE_ROOM_PROMPTS } from '@/lib/questions'
 import type { GameSession, Submission, Participant } from '@/types'
 import type { GameConfig } from '@/lib/games'
-
-// Would You Rather questions bank
-const WYR_QUESTIONS = [
-  { a: 'Always be 10 minutes late', b: 'Always be 20 minutes early' },
-  { a: 'Work from a beach with slow internet', b: 'Work from a windowless office with blazing fast internet' },
-  { a: 'Never use social media again', b: 'Give up coffee/tea forever' },
-  { a: 'Know when you\'ll die', b: 'Know how you\'ll die' },
-  { a: 'Have a rewind button for your life', b: 'Have a pause button for your life' },
-  { a: 'Only be able to whisper', b: 'Only be able to shout' },
-  { a: 'Live in a world without music', b: 'Live in a world without movies' },
-  { a: 'Have unlimited money but no free time', b: 'Have unlimited free time but barely enough money' },
-  { a: 'Know all languages', b: 'Play all instruments' },
-  { a: 'Travel to the past', b: 'Travel to the future' },
-]
 
 interface Props {
   session: GameSession
@@ -36,43 +23,119 @@ interface Props {
   roomId: string
 }
 
+const VOTE_TIMER = 20
+const REVEAL_PAUSE = 5
+
+function elapsedSince(iso: string | undefined): number {
+  if (!iso) return 0
+  return Math.floor((Date.now() - new Date(iso).getTime()) / 1000)
+}
+
 export default function VoteEngine({ session, game, participant, isHost, roomId }: Props) {
   const [submissions, setSubmissions] = useState<Submission[]>([])
+  const [allParticipants, setAllParticipants] = useState<Participant[]>([])
   const [myVote, setMyVote] = useState<string | null>(null)
-  const [gifUrl, setGifUrl] = useState('')
-  const [submitting, setSubmitting] = useState(false)
-  const [mySubmission, setMySubmission] = useState<Submission | null>(null)
+  const [timeLeft, setTimeLeft] = useState(VOTE_TIMER)
+  const [revealCountdown, setRevealCountdown] = useState(REVEAL_PAUSE)
+  const advancedRef = useRef(false)
 
+  const cfg = session.config as Record<string, unknown>
+  const phase = session.phase
   const round = session.round_number
-  const totalRounds = game.rounds || 5
-  const wyrQ = WYR_QUESTIONS[(round - 1) % WYR_QUESTIONS.length]
+  const totalRounds = (cfg.rounds as number) ?? (game.rounds ?? 7)
+  const promptStartIndex = (cfg.promptStartIndex as number) ?? 0
+
+  const questionIndex = (promptStartIndex + round - 1) % (
+    game.id === 'would-you-rather' ? WYR_QUESTIONS.length : WHO_IN_THE_ROOM_PROMPTS.length
+  )
+  const wyrQ = WYR_QUESTIONS[questionIndex]
+  const witrPrompt = WHO_IN_THE_ROOM_PROMPTS[questionIndex]
+
+  const players = allParticipants.filter(p => !p.is_host)
 
   useEffect(() => {
+    supabase.from('ib_participants').select('*').eq('room_id', roomId).order('joined_at')
+      .then(({ data }) => { if (data) setAllParticipants(data) })
+  }, [roomId])
+
+  useEffect(() => {
+    setMyVote(null)
+    advancedRef.current = false
+
     const fetchSubs = async () => {
       const { data } = await supabase
-        .from('ib_submissions')
-        .select('*')
+        .from('ib_submissions').select('*')
         .eq('game_session_id', session.id)
         .eq('round_number', round)
       if (data) {
         setSubmissions(data)
         const mine = data.find(s => s.participant_id === participant.id)
-        if (mine) {
-          setMySubmission(mine)
-          if (mine.votes?.length) setMyVote(mine.content.choice as string)
-        }
+        if (mine) setMyVote((mine.content as Record<string,string>).choice ?? mine.id)
       }
     }
     fetchSubs()
 
-    const channel = supabase
-      .channel(`vote-${session.id}-${round}`)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'ib_submissions', filter: `game_session_id=eq.${session.id}` }, () => {
-        fetchSubs()
-      })
+    const ch = supabase.channel(`vote-${session.id}-${round}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'ib_submissions', filter: `game_session_id=eq.${session.id}` }, fetchSubs)
       .subscribe()
-    return () => { supabase.removeChannel(channel) }
+    return () => { supabase.removeChannel(ch) }
   }, [session.id, round, participant.id])
+
+  // Vote countdown
+  useEffect(() => {
+    if (phase !== 'submitting') return
+    const phaseStart = cfg.phaseStartedAt as string | undefined
+    const tick = () => {
+      const elapsed = elapsedSince(phaseStart)
+      const remaining = Math.max(0, VOTE_TIMER - elapsed)
+      setTimeLeft(remaining)
+      if (remaining === 0 && !advancedRef.current) {
+        advancedRef.current = true
+        advanceToReveal()
+      }
+    }
+    tick()
+    const id = setInterval(tick, 500)
+    return () => clearInterval(id)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase, cfg.phaseStartedAt])
+
+  // Reveal auto-advance
+  useEffect(() => {
+    if (phase !== 'reveal') return
+    advancedRef.current = false
+    setRevealCountdown(REVEAL_PAUSE)
+    const start = Date.now()
+    const tick = () => {
+      const elapsed = Math.floor((Date.now() - start) / 1000)
+      const remaining = Math.max(0, REVEAL_PAUSE - elapsed)
+      setRevealCountdown(remaining)
+      if (remaining === 0 && !advancedRef.current) {
+        advancedRef.current = true
+        nextRound()
+      }
+    }
+    const id = setInterval(tick, 500)
+    return () => clearInterval(id)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase, round])
+
+  async function advanceToReveal() {
+    await supabase.from('ib_game_sessions')
+      .update({ phase: 'reveal', config: { ...cfg, phaseStartedAt: new Date().toISOString() } })
+      .eq('id', session.id).eq('phase', 'submitting')
+  }
+
+  async function nextRound() {
+    if (round >= totalRounds) {
+      await supabase.from('ib_game_sessions').update({ phase: 'ended' }).eq('id', session.id)
+      await supabase.from('ib_rooms').update({ status: 'waiting', current_game_id: null }).eq('id', roomId)
+    } else {
+      await supabase.from('ib_game_sessions')
+        .update({ phase: 'submitting', round_number: round + 1, config: { ...cfg, phaseStartedAt: new Date().toISOString() } })
+        .eq('id', session.id).eq('phase', 'reveal')
+    }
+  }
 
   async function vote(choice: string) {
     if (myVote) return
@@ -83,220 +146,174 @@ export default function VoteEngine({ session, game, participant, isHost, roomId 
       content: { choice },
       round_number: round,
     })
-  }
-
-  async function submitGif() {
-    if (!gifUrl.trim() || mySubmission) return
-    setSubmitting(true)
-    const { data } = await supabase.from('ib_submissions').insert({
-      game_session_id: session.id,
-      participant_id: participant.id,
-      content: { gif_url: gifUrl.trim() },
-      round_number: round,
-    }).select().single()
-    if (data) setMySubmission(data)
-    setSubmitting(false)
-  }
-
-  async function voteForGif(submissionId: string) {
-    if (myVote === submissionId) return
-    setMyVote(submissionId)
-    // Add participant id to votes array
-    const sub = submissions.find(s => s.id === submissionId)
-    const newVotes = [...(sub?.votes || []), participant.id]
-    await supabase.from('ib_submissions').update({ votes: newVotes }).eq('id', submissionId)
-  }
-
-  async function nextRound() {
-    if (round >= totalRounds) {
-      await supabase.from('ib_game_sessions').update({ phase: 'ended' }).eq('id', session.id)
-      await supabase.from('ib_rooms').update({ status: 'waiting', current_game_id: null }).eq('id', roomId)
-    } else {
-      await supabase.from('ib_game_sessions').update({
-        round_number: round + 1,
-        phase: 'submitting',
-      }).eq('id', session.id)
+    const newCount = submissions.length + 1
+    if (newCount >= allParticipants.length && !advancedRef.current) {
+      advancedRef.current = true
+      await advanceToReveal()
     }
   }
 
-  async function advanceToVoting() {
-    await supabase.from('ib_game_sessions').update({ phase: 'voting' }).eq('id', session.id)
-  }
+  const timerPct = (timeLeft / VOTE_TIMER) * 100
+  const timerColor = timeLeft <= 5 ? 'bg-red-500' : timeLeft <= 10 ? 'bg-yellow-400' : 'bg-purple-400'
 
-  async function advanceToReveal() {
-    await supabase.from('ib_game_sessions').update({ phase: 'reveal' }).eq('id', session.id)
-  }
-
-  const voteCountA = submissions.filter(s => (s.content as Record<string,string>).choice === 'A').length
-  const voteCountB = submissions.filter(s => (s.content as Record<string,string>).choice === 'B').length
-  const totalVotes = voteCountA + voteCountB
-
-  // ── Would You Rather ────────────────────────────────────────────────────
-  if (game.id === 'would-you-rather') {
-    const phase = session.phase
-
+  // ── ENDED ─────────────────────────────────────────────────────────────────
+  if (phase === 'ended') {
     return (
-      <div className="max-w-2xl mx-auto px-6 py-8">
-        <div className="text-center mb-6">
-          <div className="text-3xl mb-1">{game.emoji}</div>
-          <h2 className="text-lg font-bold text-white">{game.name}</h2>
-          <p className="text-white/40 text-sm">Round {round} of {totalRounds}</p>
-        </div>
-
-        <div className="bg-white/10 border border-white/20 rounded-2xl p-2 mb-6">
-          <p className="text-center text-white/60 text-sm py-2">Would you rather...</p>
-          <div className="grid grid-cols-2 gap-2">
-            {['A', 'B'].map((opt, i) => {
-              const text = i === 0 ? wyrQ.a : wyrQ.b
-              const count = i === 0 ? voteCountA : voteCountB
-              const pct = totalVotes ? Math.round((count / totalVotes) * 100) : 0
-              const chosen = myVote === opt
-
-              return (
-                <button
-                  key={opt}
-                  onClick={() => !myVote && !isHost && vote(opt)}
-                  disabled={!!myVote || isHost || phase === 'reveal'}
-                  className={`relative rounded-xl p-5 text-center transition-all ${
-                    chosen ? 'bg-purple-500 border-purple-400 border' :
-                    myVote || phase === 'reveal' ? 'bg-white/5 border border-white/10' :
-                    'bg-white/5 border border-white/10 hover:bg-white/15 hover:border-white/30 cursor-pointer'
-                  }`}
-                >
-                  <div className="font-bold text-xs text-white/50 mb-2">{opt}</div>
-                  <p className="text-white font-medium text-sm leading-snug">{text}</p>
-                  {(myVote || phase === 'reveal') && (
-                    <div className="mt-3">
-                      <div className="text-2xl font-black text-white">{pct}%</div>
-                      <div className="text-white/40 text-xs">{count} vote{count !== 1 ? 's' : ''}</div>
-                      <div className="mt-2 h-1.5 bg-white/10 rounded-full overflow-hidden">
-                        <div className="h-full bg-purple-400 rounded-full transition-all" style={{ width: `${pct}%` }} />
-                      </div>
-                    </div>
-                  )}
-                </button>
-              )
-            })}
-          </div>
-        </div>
-
-        {!isHost && !myVote && phase !== 'reveal' && (
-          <p className="text-center text-white/40 text-sm">Tap your choice</p>
-        )}
-        {!isHost && myVote && (
-          <p className="text-center text-white/60 text-sm">Voted! Waiting for results...</p>
-        )}
-
+      <div className="flex flex-col items-center justify-center min-h-[60vh] text-center px-6">
+        <div className="text-6xl mb-4">🎉</div>
+        <h2 className="text-2xl font-bold text-white mb-2">That's a wrap!</h2>
+        <p className="text-white/60">Hope you learned something new about your team.</p>
         {isHost && (
-          <div className="flex gap-3">
-            {phase === 'submitting' && (
-              <button onClick={advanceToReveal} className="flex-1 bg-purple-500 hover:bg-purple-400 text-white font-bold py-3 rounded-xl transition-colors">
-                Show results →
-              </button>
-            )}
-            {phase === 'reveal' && (
-              <button onClick={nextRound} className="flex-1 bg-purple-500 hover:bg-purple-400 text-white font-bold py-3 rounded-xl transition-colors">
-                {round >= totalRounds ? 'End game 🎉' : `Next round →`}
-              </button>
-            )}
-          </div>
+          <a href="/host" className="mt-8 bg-purple-500 hover:bg-purple-400 text-white font-bold px-8 py-4 rounded-xl transition-colors">
+            Play another game
+          </a>
         )}
       </div>
     )
   }
 
-  // ── GIF Battle ───────────────────────────────────────────────────────────
-  const phase = session.phase
+  // ══════════════════════════════════════════════════════════════════════════
+  // WOULD YOU RATHER
+  // ══════════════════════════════════════════════════════════════════════════
+  if (game.id === 'would-you-rather') {
+    const voteA = submissions.filter(s => (s.content as Record<string,string>).choice === 'A').length
+    const voteB = submissions.filter(s => (s.content as Record<string,string>).choice === 'B').length
+    const total = voteA + voteB
+    const showResults = phase === 'reveal' || !!myVote
 
-  return (
-    <div className="max-w-2xl mx-auto px-6 py-8">
-      <div className="text-center mb-6">
-        <div className="text-3xl mb-1">{game.emoji}</div>
-        <h2 className="text-lg font-bold text-white">{game.name}</h2>
-        <p className="text-white/60 text-sm mt-1">Find the best GIF for the prompt</p>
-      </div>
-
-      {/* GIF Submission phase */}
-      {phase === 'submitting' && !isHost && !mySubmission && (
-        <div className="space-y-4">
-          <p className="text-center text-yellow-300 font-semibold">Find a GIF on Giphy and paste the URL here</p>
-          <input
-            type="url"
-            value={gifUrl}
-            onChange={e => setGifUrl(e.target.value)}
-            placeholder="https://media.giphy.com/..."
-            className="w-full bg-white/10 border border-white/20 rounded-xl px-4 py-3 text-white placeholder:text-white/30 focus:outline-none focus:border-yellow-300"
-          />
-          <button onClick={submitGif} disabled={submitting || !gifUrl.trim()} className="w-full bg-yellow-400 hover:bg-yellow-300 disabled:opacity-40 text-gray-900 font-bold py-4 rounded-xl transition-colors">
-            {submitting ? 'Submitting...' : 'Submit GIF ✓'}
-          </button>
+    return (
+      <div className="max-w-lg mx-auto px-4 py-6">
+        <div className="flex items-center justify-between mb-4">
+          <span className="text-white/40 text-xs">Round {round}/{totalRounds}</span>
+          <span className="text-white/40 text-xs">{game.emoji} {game.name}</span>
         </div>
-      )}
 
-      {phase === 'submitting' && !isHost && mySubmission && (
-        <div className="text-center">
-          <p className="text-white/60 mb-4">Your GIF is in! Waiting for others...</p>
-          <img src={(mySubmission.content as Record<string,string>).gif_url} alt="Your GIF" className="max-h-40 mx-auto rounded-xl" />
-        </div>
-      )}
+        {phase === 'submitting' && (
+          <>
+            <div className="h-1.5 bg-white/10 rounded-full mb-1 overflow-hidden">
+              <div className={`h-full rounded-full transition-all ${timerColor}`} style={{ width: `${timerPct}%` }} />
+            </div>
+            <p className="text-right text-white/40 text-xs mb-4">{timeLeft}s</p>
+          </>
+        )}
+        {phase === 'reveal' && (
+          <p className="text-center text-white/40 text-xs mb-4">Next in {revealCountdown}s…</p>
+        )}
 
-      {phase === 'submitting' && isHost && (
-        <div className="text-center">
-          <p className="text-white/60 mb-2">{submissions.length} GIFs submitted</p>
-          <button onClick={advanceToVoting} disabled={submissions.length === 0} className="bg-purple-500 hover:bg-purple-400 disabled:opacity-40 text-white font-bold px-8 py-3 rounded-xl transition-colors">
-            Start voting →
-          </button>
-        </div>
-      )}
+        <p className="text-center text-white/60 text-sm mb-3 font-medium">Would you rather…</p>
 
-      {/* Voting phase */}
-      {phase === 'voting' && (
-        <div>
-          <p className="text-center text-white/60 text-sm mb-4">Vote for the best GIF!</p>
-          <div className="grid grid-cols-2 gap-3">
-            {submissions.map(sub => (
+        <div className="grid grid-cols-2 gap-3 mb-4">
+          {(['A', 'B'] as const).map((opt, i) => {
+            const text = i === 0 ? wyrQ.a : wyrQ.b
+            const count = i === 0 ? voteA : voteB
+            const pct = total ? Math.round((count / total) * 100) : 0
+            const chosen = myVote === opt
+            const winning = showResults && count === Math.max(voteA, voteB) && total > 0
+
+            return (
               <button
-                key={sub.id}
-                onClick={() => !isHost && voteForGif(sub.id)}
-                disabled={isHost}
-                className={`rounded-xl overflow-hidden border-2 transition-all ${
-                  myVote === sub.id ? 'border-yellow-400 scale-95' : 'border-transparent hover:border-white/40'
+                key={opt}
+                onClick={() => phase === 'submitting' && !myVote && vote(opt)}
+                disabled={!!myVote || phase === 'reveal'}
+                className={`relative rounded-2xl p-5 text-center transition-all border-2 ${
+                  chosen ? 'bg-purple-500/30 border-purple-400' :
+                  winning && showResults ? 'bg-white/10 border-white/30' :
+                  showResults ? 'bg-white/5 border-white/10' :
+                  'bg-white/5 border-white/15 hover:bg-white/15 hover:border-white/40 cursor-pointer'
                 }`}
               >
-                <img src={(sub.content as Record<string,string>).gif_url} alt="GIF" className="w-full h-32 object-cover" />
+                <div className="text-xs font-bold text-white/40 mb-2">{opt}</div>
+                <p className="text-white text-sm font-medium leading-snug">{text}</p>
+                {showResults && (
+                  <div className="mt-3">
+                    <p className="text-2xl font-black text-white">{pct}%</p>
+                    <p className="text-white/40 text-xs">{count} vote{count !== 1 ? 's' : ''}</p>
+                    <div className="mt-2 h-1 bg-white/10 rounded-full overflow-hidden">
+                      <div className={`h-full rounded-full ${chosen ? 'bg-purple-400' : 'bg-white/30'}`} style={{ width: `${pct}%` }} />
+                    </div>
+                  </div>
+                )}
+                {chosen && <div className="absolute top-2 right-2 text-xs text-purple-300">✓</div>}
               </button>
-            ))}
-          </div>
-          {isHost && (
-            <button onClick={advanceToReveal} className="w-full mt-4 bg-purple-500 hover:bg-purple-400 text-white font-bold py-3 rounded-xl transition-colors">
-              Show winner →
-            </button>
-          )}
+            )
+          })}
         </div>
+
+        {!myVote && phase === 'submitting' && <p className="text-center text-white/40 text-sm">Tap your choice</p>}
+        {myVote && phase === 'submitting' && <p className="text-center text-white/50 text-sm">Voted! {submissions.length}/{allParticipants.length} in</p>}
+      </div>
+    )
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // WHO IN THE ROOM?
+  // ══════════════════════════════════════════════════════════════════════════
+  const voteCounts: Record<string, number> = {}
+  for (const sub of submissions) {
+    const c = (sub.content as Record<string,string>).choice
+    if (c) voteCounts[c] = (voteCounts[c] ?? 0) + 1
+  }
+  const maxVotes = Math.max(0, ...Object.values(voteCounts))
+  const showResults = phase === 'reveal' || !!myVote
+  const sortedPlayers = showResults
+    ? [...players].sort((a, b) => (voteCounts[b.id] ?? 0) - (voteCounts[a.id] ?? 0))
+    : players
+
+  return (
+    <div className="max-w-lg mx-auto px-4 py-6">
+      <div className="flex items-center justify-between mb-4">
+        <span className="text-white/40 text-xs">Round {round}/{totalRounds}</span>
+        <span className="text-white/40 text-xs">{game.emoji} {game.name}</span>
+      </div>
+
+      {phase === 'submitting' && (
+        <>
+          <div className="h-1.5 bg-white/10 rounded-full mb-1 overflow-hidden">
+            <div className={`h-full rounded-full transition-all ${timerColor}`} style={{ width: `${timerPct}%` }} />
+          </div>
+          <p className="text-right text-white/40 text-xs mb-4">{timeLeft}s</p>
+        </>
+      )}
+      {phase === 'reveal' && (
+        <p className="text-center text-white/40 text-xs mb-4">Next in {revealCountdown}s…</p>
       )}
 
-      {/* Reveal */}
-      {phase === 'reveal' && (
-        <div>
-          <p className="text-center text-yellow-300 font-bold text-lg mb-4">🏆 Results</p>
-          <div className="space-y-3">
-            {submissions
-              .sort((a, b) => (b.votes?.length || 0) - (a.votes?.length || 0))
-              .map((sub, i) => (
-                <div key={sub.id} className={`flex items-center gap-3 rounded-xl p-3 border ${i === 0 ? 'border-yellow-400 bg-yellow-400/10' : 'border-white/10 bg-white/5'}`}>
-                  <span className="text-xl">{i === 0 ? '🥇' : i === 1 ? '🥈' : '🥉'}</span>
-                  <img src={(sub.content as Record<string,string>).gif_url} alt="" className="w-16 h-12 object-cover rounded-lg" />
-                  <span className="text-white/60 text-sm">{sub.votes?.length || 0} votes</span>
-                </div>
-              ))}
-          </div>
-          {isHost && (
-            <button onClick={nextRound} className="w-full mt-4 bg-green-500 hover:bg-green-400 text-white font-bold py-3 rounded-xl transition-colors">
-              End game 🎉
+      <div className="bg-yellow-400/10 border border-yellow-400/30 rounded-2xl px-5 py-5 mb-5 text-center">
+        <p className="text-white/40 text-xs uppercase tracking-widest mb-2">Most likely to…</p>
+        <p className="text-white font-bold text-lg leading-snug">{witrPrompt}</p>
+      </div>
+
+      <div className="grid grid-cols-2 gap-2">
+        {sortedPlayers.map(p => {
+          const isMe = p.id === participant.id
+          const isChosen = myVote === p.id
+          const voteCount = voteCounts[p.id] ?? 0
+          const isWinner = showResults && voteCount === maxVotes && maxVotes > 0
+
+          return (
+            <button
+              key={p.id}
+              onClick={() => phase === 'submitting' && !myVote && !isMe && vote(p.id)}
+              disabled={!!myVote || isMe || phase === 'reveal'}
+              className={`rounded-xl px-4 py-3 text-sm font-medium border transition-all flex items-center justify-between gap-2 ${
+                isWinner && showResults ? 'bg-yellow-400/15 border-yellow-400/40 text-white' :
+                isChosen ? 'bg-purple-500/30 border-purple-400 text-white' :
+                isMe ? 'bg-white/5 border-white/10 text-white/30 cursor-default' :
+                myVote || phase === 'reveal' ? 'bg-white/5 border-white/10 text-white/60' :
+                'bg-white/10 border-white/20 text-white hover:bg-white/20 hover:border-white/40 cursor-pointer'
+              }`}
+            >
+              <span className="truncate">{isWinner && showResults ? '👑 ' : ''}{p.display_name}{isMe ? ' (you)' : ''}</span>
+              {showResults && voteCount > 0 && (
+                <span className={`text-xs font-bold flex-shrink-0 ${isWinner ? 'text-yellow-400' : 'text-white/50'}`}>{voteCount}</span>
+              )}
             </button>
-          )}
-        </div>
-      )}
+          )
+        })}
+      </div>
+
+      {!myVote && phase === 'submitting' && <p className="text-center text-white/40 text-sm mt-4">Tap who fits best</p>}
+      {myVote && phase === 'submitting' && <p className="text-center text-white/50 text-sm mt-4">Voted! {submissions.length}/{allParticipants.length} in</p>}
     </div>
   )
 }

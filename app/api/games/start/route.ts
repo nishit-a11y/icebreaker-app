@@ -1,6 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
 import { getGame } from '@/lib/games'
+import { WYR_QUESTIONS, THIS_OR_THAT, FINISH_THE_SENTENCE_PROMPTS, WHO_IN_THE_ROOM_PROMPTS } from '@/lib/questions'
+
+const BANK_SIZES: Record<string, number> = {
+  'wyr': WYR_QUESTIONS.length,
+  'this-or-that': THIS_OR_THAT.length,
+  'finish-sentence': FINISH_THE_SENTENCE_PROMPTS.length,
+  'who-in-the-room': WHO_IN_THE_ROOM_PROMPTS.length,
+}
 
 // POST /api/games/start — host starts a game session
 export async function POST(req: NextRequest) {
@@ -46,6 +54,12 @@ export async function POST(req: NextRequest) {
           timerSeconds: game.timerSeconds,
           rounds: game.rounds,
           fields: game.fields,
+          // Random start index for question banks — all clients use same index
+          promptStartIndex: game.questionBank
+            ? Math.floor(Math.random() * (BANK_SIZES[game.questionBank] ?? 30))
+            : 0,
+          scores: {},
+          phaseStartedAt: new Date().toISOString(),
         },
       })
       .select()
