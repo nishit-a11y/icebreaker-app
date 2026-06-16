@@ -240,7 +240,15 @@ export default function VoteEngine({ session, game, participant, isHost, roomId 
         </div>
 
         {!myVote && phase === 'submitting' && <p className="text-center text-white/40 text-sm">Tap your choice</p>}
-        {myVote && phase === 'submitting' && <p className="text-center text-white/50 text-sm">Voted! {submissions.length}/{allParticipants.length} in</p>}
+        {myVote && phase === 'submitting' && <p className="text-center text-white/50 text-sm">Voted! {submissions.length}/{players.length} in</p>}
+        {isHost && phase === 'submitting' && submissions.length > 0 && (
+          <button
+            onClick={() => { if (!advancedRef.current) { advancedRef.current = true; advanceToReveal() } }}
+            className="w-full mt-3 bg-white/10 hover:bg-white/20 border border-white/20 text-white font-semibold py-2.5 rounded-xl transition-colors text-sm"
+          >
+            Skip to results ({submissions.length}/{players.length}) →
+          </button>
+        )}
       </div>
     )
   }
@@ -313,7 +321,15 @@ export default function VoteEngine({ session, game, participant, isHost, roomId 
       </div>
 
       {!myVote && phase === 'submitting' && <p className="text-center text-white/40 text-sm mt-4">Tap who fits best</p>}
-      {myVote && phase === 'submitting' && <p className="text-center text-white/50 text-sm mt-4">Voted! {submissions.length}/{allParticipants.length} in</p>}
+      {myVote && phase === 'submitting' && <p className="text-center text-white/50 text-sm mt-4">Voted! {submissions.length}/{players.length} in</p>}
+      {isHost && phase === 'submitting' && submissions.length > 0 && (
+        <button
+          onClick={() => { if (!advancedRef.current) { advancedRef.current = true; advanceToReveal() } }}
+          className="w-full mt-3 bg-white/10 hover:bg-white/20 border border-white/20 text-white font-semibold py-2.5 rounded-xl transition-colors text-sm"
+        >
+          Skip to results ({submissions.length}/{players.length}) →
+        </button>
+      )}
     </div>
   )
 }

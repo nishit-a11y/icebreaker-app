@@ -106,23 +106,26 @@ export default function SubmitRevealEngine({ session, game, participant, isHost,
         event: 'INSERT', schema: 'public', table: 'ib_submissions',
         filter: `game_session_id=eq.${session.id}`,
       }, (payload) => {
-        setSubmissions(prev => {
-          const newSubs = [...prev, payload.new as Submission]
-          // Auto-advance submitting → guessing when all players have answered
-          if (phase === 'submitting') {
-            const answers = newSubs.filter(s => s.round_number !== -1)
-            if (answers.length >= players.length && players.length > 0) {
-              advanceToGuessing(answers, 0)
-            }
-          }
-          return newSubs
-        })
+        setSubmissions(prev => [...prev, payload.new as Submission])
       })
       .subscribe()
 
     return () => { supabase.removeChannel(channel) }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session.id, roomId, currentIdx])
+
+  // ── Auto-advance: all players submitted → start guessing ─────────────────
+  // Separate effect so it always has fresh submissions + players values,
+  // avoiding the stale-closure bug in the realtime handler.
+  useEffect(() => {
+    if (phase !== 'submitting') return
+    const answers = submissions.filter(s => s.round_number !== -1)
+    if (answers.length >= players.length && players.length > 0 && !advancedRef.current) {
+      advancedRef.current = true
+      advanceToGuessing(answers, 0)
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [submissions, players.length, phase])
 
   // Reset guess when phase or currentIdx changes
   useEffect(() => {
@@ -353,7 +356,7 @@ export default function SubmitRevealEngine({ session, game, participant, isHost,
           <p className="text-white/50 text-sm mb-4">
             {submitCount} of {totalPlayers} answered
           </p>
-          <div className="flex gap-1.5 flex-wrap justify-center max-w-xs">
+          <div className="flex gap-1.5 flex-wrap justify-center max-w-xs mb-6">
             {players.map((p) => {
               const submitted = answers.some(s => s.participant_id === p.id)
               return (
@@ -364,7 +367,21 @@ export default function SubmitRevealEngine({ session, game, participant, isHost,
               )
             })}
           </div>
-          <p className="text-white/30 text-xs mt-6">Game starts automatically when everyone answers</p>
+          {isHost && answers.length > 0 ? (
+            <button
+              onClick={() => {
+                if (!advancedRef.current) {
+                  advancedRef.current = true
+                  advanceToGuessing(answers, 0)
+                }
+              }}
+              className="bg-yellow-400 hover:bg-yellow-300 text-gray-900 font-bold px-6 py-3 rounded-xl transition-colors text-sm"
+            >
+              Start game now ({submitCount}/{totalPlayers}) →
+            </button>
+          ) : (
+            <p className="text-white/30 text-xs">Game starts automatically when everyone answers</p>
+          )}
         </div>
       )
     }

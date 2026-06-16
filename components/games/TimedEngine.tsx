@@ -277,6 +277,14 @@ export default function TimedEngine({ session, game, participant, isHost, roomId
       {!myPick && phase === 'submitting' && (
         <p className="text-center text-white/40 text-sm mt-4">Tap your pick</p>
       )}
+      {isHost && phase === 'submitting' && submissions.length > 0 && (
+        <button
+          onClick={() => { if (!advancedRef.current) { advancedRef.current = true; advanceToReveal() } }}
+          className="w-full mt-3 bg-white/10 hover:bg-white/20 border border-white/20 text-white font-semibold py-2.5 rounded-xl transition-colors text-sm"
+        >
+          Skip to results ({submissions.length}/{players.length}) →
+        </button>
+      )}
     </div>
   )
 }
