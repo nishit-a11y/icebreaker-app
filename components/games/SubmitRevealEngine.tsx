@@ -207,6 +207,19 @@ export default function SubmitRevealEngine({ session, game, participant, isHost,
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session.id, cfg])
 
+  // Host-only force start — no phase guard, bypasses advancedRef so it always works
+  async function forceStartGuessing() {
+    const currentAnswers = submissions.filter(s => s.round_number !== -1)
+    if (currentAnswers.length === 0) return
+    advancedRef.current = true
+    await supabase.from('ib_game_sessions')
+      .update({
+        phase: 'guessing',
+        config: { ...cfg, currentSubmissionIndex: 0, phaseStartedAt: new Date().toISOString() },
+      })
+      .eq('id', session.id)  // No phase guard — host override always applies
+  }
+
   const goToNextGuessing = useCallback(async (idx: number) => {
     await supabase.from('ib_game_sessions')
       .update({
@@ -369,12 +382,7 @@ export default function SubmitRevealEngine({ session, game, participant, isHost,
           </div>
           {isHost && answers.length > 0 ? (
             <button
-              onClick={() => {
-                if (!advancedRef.current) {
-                  advancedRef.current = true
-                  advanceToGuessing(answers, 0)
-                }
-              }}
+              onClick={forceStartGuessing}
               className="bg-yellow-400 hover:bg-yellow-300 text-gray-900 font-bold px-6 py-3 rounded-xl transition-colors text-sm"
             >
               Start game now ({submitCount}/{totalPlayers}) →

@@ -120,6 +120,14 @@ export default function TimedEngine({ session, game, participant, isHost, roomId
       .eq('id', session.id).eq('phase', 'submitting')
   }
 
+  // Host-only force skip — no phase guard so it always works
+  async function forceSkipToReveal() {
+    advancedRef.current = true
+    await supabase.from('ib_game_sessions')
+      .update({ phase: 'reveal', config: { ...cfg, phaseStartedAt: new Date().toISOString() } })
+      .eq('id', session.id)
+  }
+
   async function nextRound() {
     if (round >= totalRounds) {
       await supabase.from('ib_game_sessions').update({ phase: 'ended' }).eq('id', session.id)
@@ -279,7 +287,7 @@ export default function TimedEngine({ session, game, participant, isHost, roomId
       )}
       {isHost && phase === 'submitting' && submissions.length > 0 && (
         <button
-          onClick={() => { if (!advancedRef.current) { advancedRef.current = true; advanceToReveal() } }}
+          onClick={forceSkipToReveal}
           className="w-full mt-3 bg-white/10 hover:bg-white/20 border border-white/20 text-white font-semibold py-2.5 rounded-xl transition-colors text-sm"
         >
           Skip to results ({submissions.length}/{players.length}) →
