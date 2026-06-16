@@ -147,7 +147,7 @@ export default function VoteEngine({ session, game, participant, isHost, roomId 
       round_number: round,
     })
     const newCount = submissions.length + 1
-    if (newCount >= allParticipants.length && !advancedRef.current) {
+    if (newCount >= players.length && !advancedRef.current) {
       advancedRef.current = true
       await advanceToReveal()
     }

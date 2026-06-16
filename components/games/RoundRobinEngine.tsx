@@ -123,7 +123,8 @@ export default function RoundRobinEngine({ session, game, participant, isHost, p
       {/* Hot Seat: others submit questions, subject picks */}
       {game.id === 'hot-seat' && (
         <div>
-          {!isMyTurn && !mySubmission && (
+          {/* Non-subject non-host players submit questions */}
+          {!isMyTurn && !isHost && !mySubmission && (
             <div>
               <p className="text-white/60 text-sm text-center mb-4">Submit a question for {currentSubject?.display_name}</p>
               <textarea
@@ -143,7 +144,7 @@ export default function RoundRobinEngine({ session, game, participant, isHost, p
             </div>
           )}
 
-          {!isMyTurn && mySubmission && (
+          {!isMyTurn && !isHost && mySubmission && (
             <p className="text-center text-white/60">Question submitted! Waiting for {currentSubject?.display_name} to pick one...</p>
           )}
 
@@ -161,11 +162,31 @@ export default function RoundRobinEngine({ session, game, participant, isHost, p
                   ))}
                 </div>
               )}
-              {isHost && submissions.length > 0 && (
-                <button onClick={nextPerson} className="w-full mt-4 bg-purple-500 hover:bg-purple-400 text-white font-bold py-3 rounded-xl transition-colors">
-                  {currentPlayerIndex >= players.length - 1 ? 'End game 🎉' : 'Next person →'}
-                </button>
+            </div>
+          )}
+
+          {/* Host view: observe + advance */}
+          {isHost && (
+            <div>
+              <p className="text-white/60 text-sm text-center mb-4">
+                {submissions.length} question{submissions.length !== 1 ? 's' : ''} submitted for {currentSubject?.display_name}
+              </p>
+              {submissions.length > 0 && (
+                <div className="space-y-2 mb-4">
+                  {submissions.map(sub => (
+                    <div key={sub.id} className="bg-white/5 border border-white/10 rounded-xl px-4 py-3">
+                      <p className="text-white/70 text-sm">{(sub.content as Record<string,string>).field_0}</p>
+                    </div>
+                  ))}
+                </div>
               )}
+              <button
+                onClick={nextPerson}
+                disabled={submissions.length === 0}
+                className="w-full mt-2 bg-purple-500 hover:bg-purple-400 disabled:opacity-40 text-white font-bold py-3 rounded-xl transition-colors"
+              >
+                {currentPlayerIndex >= players.length - 1 ? 'End game 🎉' : 'Next person →'}
+              </button>
             </div>
           )}
         </div>
@@ -233,12 +254,12 @@ export default function RoundRobinEngine({ session, game, participant, isHost, p
           )}
 
           {/* Host controls */}
-          {isHost && mySubmission && (
+          {isHost && submissions.some(s => s.participant_id === currentSubject?.id) && (
             <button onClick={nextPerson} className="w-full mt-4 bg-purple-500 hover:bg-purple-400 text-white font-bold py-3 rounded-xl transition-colors">
               {currentPlayerIndex >= players.length - 1 ? 'End game 🎉' : `Next: ${players[currentPlayerIndex + 1]?.display_name} →`}
             </button>
           )}
-          {isHost && !mySubmission && (
+          {isHost && !submissions.some(s => s.participant_id === currentSubject?.id) && (
             <p className="text-center text-white/40 text-sm mt-4">Waiting for {currentSubject?.display_name} to share...</p>
           )}
         </div>
