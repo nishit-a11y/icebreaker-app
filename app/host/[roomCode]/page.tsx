@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback } from 'react'
 import { useParams, useSearchParams, useRouter } from 'next/navigation'
+import Link from 'next/link'
 import { supabase } from '@/lib/supabase'
 import type { User } from '@supabase/supabase-js'
 import { getGame } from '@/lib/games'
@@ -147,11 +148,24 @@ export default function HostLobby() {
       {/* Header */}
       <header className="border-b border-white/10 px-6 py-4">
         <div className="max-w-4xl mx-auto flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <span className="text-2xl">🧊</span>
-            <span className="font-bold">IceBreak</span>
+          <div className="flex items-center gap-3">
+            <Link href="/host" className="text-white/50 hover:text-white transition-colors text-sm cursor-pointer">
+              ← Back
+            </Link>
+            <Link href="/host" className="flex items-center gap-2 hover:opacity-80 transition-opacity">
+              <span className="text-2xl">🧊</span>
+              <span className="font-bold">IceBreak</span>
+            </Link>
           </div>
-          <div className="text-white/50 text-sm">HOST VIEW</div>
+          <div className="flex items-center gap-4">
+            <div className="text-white/50 text-sm">HOST VIEW</div>
+            <button
+              onClick={async () => { await supabase.auth.signOut(); window.location.href = '/' }}
+              className="text-white/40 hover:text-white/80 text-sm transition-colors cursor-pointer"
+            >
+              Log out
+            </button>
+          </div>
         </div>
       </header>
 

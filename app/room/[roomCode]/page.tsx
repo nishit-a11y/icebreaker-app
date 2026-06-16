@@ -127,9 +127,19 @@ export default function ParticipantRoom() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-900 via-gray-950 to-black text-white flex flex-col">
       {/* Header */}
-      <header className="px-6 py-5 text-center border-b border-white/10">
-        <span className="text-2xl">🧊</span>
-        <p className="text-white/50 text-xs mt-1 uppercase tracking-widest">Room {roomCode}</p>
+      <header className="px-6 py-4 border-b border-white/10 flex items-center justify-between">
+        <a href="/" className="text-2xl hover:opacity-80 transition-opacity">🧊</a>
+        <p className="text-white/50 text-xs uppercase tracking-widest">Room {roomCode}</p>
+        <button
+          onClick={() => {
+            if (!confirm('Leave the room?')) return
+            localStorage.removeItem('icebreak_participant')
+            window.location.href = '/join'
+          }}
+          className="text-white/30 hover:text-white/70 text-xs transition-colors cursor-pointer"
+        >
+          Leave
+        </button>
       </header>
 
       <main className="flex-1 flex flex-col items-center justify-center px-6 py-10 text-center">
@@ -190,6 +200,7 @@ export default function ParticipantRoom() {
           Keep this tab open. The game will begin automatically.
         </p>
       </footer>
+
     </div>
   )
 }

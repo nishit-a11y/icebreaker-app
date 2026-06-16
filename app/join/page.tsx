@@ -72,8 +72,10 @@ function JoinForm() {
       <div className="w-full max-w-sm">
         {/* Logo */}
         <div className="text-center mb-8">
-          <span className="text-5xl">🧊</span>
-          <h1 className="text-white font-extrabold text-2xl mt-2">IceBreak</h1>
+          <a href="/" className="inline-block hover:opacity-80 transition-opacity">
+            <span className="text-5xl">🧊</span>
+            <h1 className="text-white font-extrabold text-2xl mt-2">IceBreak</h1>
+          </a>
           <p className="text-white/60 text-sm mt-1">Join your team session</p>
         </div>
 

@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
+import Link from 'next/link'
 import { supabase } from '@/lib/supabase'
 import type { User } from '@supabase/supabase-js'
 import GameRouter from '@/components/games/GameRouter'
@@ -80,9 +81,23 @@ export default function HostGame() {
     <div className="min-h-screen bg-gradient-to-br from-gray-900 via-gray-950 to-black text-white">
       {/* Host header */}
       <header className="border-b border-white/10 px-4 py-3 flex items-center justify-between">
-        <span className="text-lg">🧊</span>
+        <Link href="/host" className="text-lg hover:opacity-80 transition-opacity">🧊</Link>
         <span className="text-yellow-400 text-xs font-semibold uppercase tracking-widest">HOST</span>
-        <span className="font-mono text-white/40 text-xs">{roomCode}</span>
+        <div className="flex items-center gap-3">
+          <span className="font-mono text-white/40 text-xs">{roomCode}</span>
+          <button
+            onClick={async () => {
+              if (!confirm('End the game and return to the lobby?')) return
+              if (room) {
+                await supabase.from('ib_game_sessions').update({ phase: 'ended' }).eq('id', room.current_game_id!)
+                await supabase.from('ib_rooms').update({ status: 'waiting', current_game_id: null }).eq('id', room.id)
+              }
+            }}
+            className="text-white/30 hover:text-red-400 text-xs transition-colors cursor-pointer"
+          >
+            End game
+          </button>
+        </div>
       </header>
 
       <GameRouter

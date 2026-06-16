@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
+import Link from 'next/link'
 import { supabase } from '@/lib/supabase'
 import type { User } from '@supabase/supabase-js'
 import { GAMES } from '@/lib/games'
@@ -34,6 +35,11 @@ export default function HostDashboard() {
 
   // Get plan from user metadata (set by Stripe webhook)
   const userPlan = (user?.user_metadata?.plan as string) || 'free'
+
+  async function handleLogout() {
+    await supabase.auth.signOut()
+    router.push('/')
+  }
 
   useEffect(() => {
     if (isLoaded && !user) router.push('/auth/signin')
@@ -82,10 +88,10 @@ export default function HostDashboard() {
       {/* Header */}
       <header className="border-b border-white/10 px-6 py-4">
         <div className="max-w-5xl mx-auto flex items-center justify-between">
-          <div className="flex items-center gap-2">
+          <Link href="/host" className="flex items-center gap-2 hover:opacity-80 transition-opacity">
             <span className="text-2xl">🧊</span>
             <span className="font-bold text-lg">IceBreak</span>
-          </div>
+          </Link>
           <div className="flex items-center gap-4">
             <span className={`text-xs font-semibold px-2.5 py-1 rounded-full ${
               userPlan === 'pro' ? 'bg-yellow-400/20 text-yellow-300' :
@@ -95,6 +101,12 @@ export default function HostDashboard() {
               {userPlan.toUpperCase()}
             </span>
             <span className="text-white/60 text-sm">{user.user_metadata?.full_name?.split(' ')[0] || user.email?.split('@')[0] || 'Host'}</span>
+            <button
+              onClick={handleLogout}
+              className="text-white/40 hover:text-white/80 text-sm transition-colors cursor-pointer"
+            >
+              Log out
+            </button>
           </div>
         </div>
       </header>
@@ -112,7 +124,7 @@ export default function HostDashboard() {
               <p className="font-semibold text-sm">You're on the Free plan</p>
               <p className="text-white/60 text-xs mt-0.5">3 games available. Upgrade to unlock all 10.</p>
             </div>
-            <a href="/pricing" className="bg-purple-500 hover:bg-purple-400 text-white text-sm font-semibold px-4 py-2 rounded-lg transition-colors">
+            <a href="/#pricing" className="bg-purple-500 hover:bg-purple-400 text-white text-sm font-semibold px-4 py-2 rounded-lg transition-colors">
               Upgrade
             </a>
           </div>

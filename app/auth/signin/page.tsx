@@ -31,7 +31,9 @@ export default function SignInPage() {
     <div className="min-h-screen bg-gray-950 text-white flex items-center justify-center px-4">
       <div className="w-full max-w-sm">
         <div className="text-center mb-8">
-          <span className="text-4xl">🧊</span>
+          <a href="/" className="inline-block hover:opacity-80 transition-opacity">
+            <span className="text-4xl">🧊</span>
+          </a>
           <h1 className="text-2xl font-bold mt-3">Sign in to IceBreak</h1>
           <p className="text-white/50 text-sm mt-1">Host icebreakers for your team</p>
         </div>
@@ -85,6 +87,11 @@ export default function SignInPage() {
           No account?{' '}
           <a href="/auth/signup" className="text-purple-400 hover:text-purple-300 transition-colors">
             Create one
+          </a>
+        </p>
+        <p className="text-center mt-3">
+          <a href="/" className="text-white/30 hover:text-white/60 text-sm transition-colors">
+            ← Back to home
           </a>
         </p>
       </div>

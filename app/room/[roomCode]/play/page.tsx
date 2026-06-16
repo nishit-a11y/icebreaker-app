@@ -76,9 +76,21 @@ export default function ParticipantPlay() {
     <div className="min-h-screen bg-gradient-to-br from-gray-900 via-gray-950 to-black text-white">
       {/* Minimal header */}
       <header className="border-b border-white/10 px-4 py-3 flex items-center justify-between">
-        <span className="text-lg">🧊</span>
+        <a href="/" className="text-lg hover:opacity-80 transition-opacity">🧊</a>
         <span className="text-white/40 text-xs font-mono">{roomCode}</span>
-        <span className="text-white/40 text-xs">{participant.name}</span>
+        <div className="flex items-center gap-3">
+          <span className="text-white/40 text-xs">{participant.name}</span>
+          <button
+            onClick={() => {
+              if (!confirm('Leave the game?')) return
+              localStorage.removeItem('icebreak_participant')
+              window.location.href = '/join'
+            }}
+            className="text-white/20 hover:text-white/60 text-xs transition-colors cursor-pointer"
+          >
+            Leave
+          </button>
+        </div>
       </header>
 
       <GameRouter
