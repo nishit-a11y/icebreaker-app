@@ -356,18 +356,17 @@ export default function SubmitRevealEngine({ session, game, participant, isHost,
     const submitCount = answers.length
     const totalPlayers = players.length
 
-    if (mySubmission || isHost) {
+    if (mySubmission) {
+      const allAnswered = submitCount >= totalPlayers && totalPlayers > 0
       return (
         <div className="flex flex-col items-center justify-center min-h-[60vh] text-center px-6">
-          <div className="text-5xl mb-4">{isHost ? game.emoji : '✅'}</div>
-          <h2 className="text-xl font-bold text-white mb-2">
-            {isHost ? `Waiting for answers…` : 'Submitted!'}
-          </h2>
-          {prompt && !isHost && (
+          <div className="text-5xl mb-4">✅</div>
+          <h2 className="text-xl font-bold text-white mb-2">Submitted!</h2>
+          {prompt && (
             <p className="text-yellow-300/80 text-sm mb-4 max-w-xs">"{prompt}"</p>
           )}
-          <p className="text-white/50 text-sm mb-4">
-            {submitCount} of {totalPlayers} answered
+          <p className={`text-sm mb-4 ${allAnswered ? 'text-green-400 font-semibold' : 'text-white/50'}`}>
+            {allAnswered ? 'All players answered! ✓' : `${submitCount} of ${totalPlayers} answered`}
           </p>
           <div className="flex gap-1.5 flex-wrap justify-center max-w-xs mb-6">
             {players.map((p) => {
@@ -380,7 +379,9 @@ export default function SubmitRevealEngine({ session, game, participant, isHost,
               )
             })}
           </div>
-          {isHost && answers.length > 0 ? (
+          {allAnswered ? (
+            <p className="text-white/60 text-sm animate-pulse">🚀 Starting game…</p>
+          ) : isHost && answers.length > 0 ? (
             <button
               onClick={forceStartGuessing}
               className="bg-yellow-400 hover:bg-yellow-300 text-gray-900 font-bold px-6 py-3 rounded-xl transition-colors text-sm"
@@ -428,6 +429,16 @@ export default function SubmitRevealEngine({ session, game, participant, isHost,
         >
           {submitting ? 'Submitting…' : 'Submit ✓'}
         </button>
+
+        {isHost && (
+          <button
+            onClick={forceStartGuessing}
+            disabled={answers.length === 0}
+            className="w-full mt-2 text-white/40 hover:text-white/70 disabled:opacity-30 text-sm py-2 transition-colors disabled:cursor-not-allowed"
+          >
+            Skip & start with {answers.length} answer{answers.length !== 1 ? 's' : ''} →
+          </button>
+        )}
 
         <p className="text-center text-white/30 text-xs mt-4">
           {submitCount} of {totalPlayers} answered

@@ -199,10 +199,10 @@ export default function TimedEngine({ session, game, participant, isHost, roomId
       {phase === 'submitting' && (
         <div className="mb-4">
           <div className="h-2 bg-white/10 rounded-full overflow-hidden mb-1">
-            <div className={`h-full rounded-full transition-all ${timerColor}`} style={{ width: `${timerPct}%` }} />
+            <div className={`h-full rounded-full ${timerColor}`} style={{ width: `${timerPct}%`, transition: 'background-color 0.3s' }} />
           </div>
           <div className="flex justify-between text-xs text-white/40">
-            <span>{submissions.length}/{players.length} picked</span>
+            <span>{submissions.length >= players.length && players.length > 0 ? '✓ Everyone picked!' : `${submissions.length}/${players.length} picked`}</span>
             <span>{timeLeft}s</span>
           </div>
         </div>
@@ -283,12 +283,13 @@ export default function TimedEngine({ session, game, participant, isHost, roomId
       )}
 
       {!myPick && phase === 'submitting' && (
-        <p className="text-center text-white/40 text-sm mt-4">Tap your pick</p>
+        <p className="text-center text-white/40 text-sm mt-4 animate-pulse">Tap your pick 👆</p>
       )}
-      {isHost && phase === 'submitting' && submissions.length > 0 && (
+      {isHost && phase === 'submitting' && (
         <button
           onClick={forceSkipToReveal}
-          className="w-full mt-3 bg-white/10 hover:bg-white/20 border border-white/20 text-white font-semibold py-2.5 rounded-xl transition-colors text-sm"
+          disabled={submissions.length === 0}
+          className="w-full mt-3 bg-white/10 hover:bg-white/20 border border-white/20 text-white font-semibold py-2.5 rounded-xl transition-colors text-sm disabled:opacity-30 disabled:cursor-not-allowed"
         >
           Skip to results ({submissions.length}/{players.length}) →
         </button>

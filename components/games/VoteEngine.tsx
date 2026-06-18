@@ -199,7 +199,7 @@ export default function VoteEngine({ session, game, participant, isHost, roomId 
         {phase === 'submitting' && (
           <>
             <div className="h-1.5 bg-white/10 rounded-full mb-1 overflow-hidden">
-              <div className={`h-full rounded-full transition-all ${timerColor}`} style={{ width: `${timerPct}%` }} />
+              <div className={`h-full rounded-full ${timerColor}`} style={{ width: `${timerPct}%`, transition: 'background-color 0.3s' }} />
             </div>
             <p className="text-right text-white/40 text-xs mb-4">{timeLeft}s</p>
           </>
@@ -247,12 +247,19 @@ export default function VoteEngine({ session, game, participant, isHost, roomId 
           })}
         </div>
 
-        {!myVote && phase === 'submitting' && <p className="text-center text-white/40 text-sm">Tap your choice</p>}
-        {myVote && phase === 'submitting' && <p className="text-center text-white/50 text-sm">Voted! {submissions.length}/{players.length} in</p>}
-        {isHost && phase === 'submitting' && submissions.length > 0 && (
+        {!myVote && phase === 'submitting' && (
+          <p className="text-center text-white/40 text-sm animate-pulse">Tap to pick 👆</p>
+        )}
+        {myVote && phase === 'submitting' && (
+          <p className={`text-center text-sm ${submissions.length >= players.length && players.length > 0 ? 'text-green-400 font-semibold' : 'text-white/50'}`}>
+            {submissions.length >= players.length && players.length > 0 ? 'Everyone voted! ✓' : `Voted! ${submissions.length}/${players.length} in`}
+          </p>
+        )}
+        {isHost && phase === 'submitting' && (
           <button
             onClick={forceSkipToReveal}
-            className="w-full mt-3 bg-white/10 hover:bg-white/20 border border-white/20 text-white font-semibold py-2.5 rounded-xl transition-colors text-sm"
+            disabled={submissions.length === 0}
+            className="w-full mt-3 bg-white/10 hover:bg-white/20 border border-white/20 text-white font-semibold py-2.5 rounded-xl transition-colors text-sm disabled:opacity-30 disabled:cursor-not-allowed"
           >
             Skip to results ({submissions.length}/{players.length}) →
           </button>
@@ -328,12 +335,19 @@ export default function VoteEngine({ session, game, participant, isHost, roomId 
         })}
       </div>
 
-      {!myVote && phase === 'submitting' && <p className="text-center text-white/40 text-sm mt-4">Tap who fits best</p>}
-      {myVote && phase === 'submitting' && <p className="text-center text-white/50 text-sm mt-4">Voted! {submissions.length}/{players.length} in</p>}
-      {isHost && phase === 'submitting' && submissions.length > 0 && (
+      {!myVote && phase === 'submitting' && (
+        <p className="text-center text-white/40 text-sm mt-4 animate-pulse">Tap who fits best 👆</p>
+      )}
+      {myVote && phase === 'submitting' && (
+        <p className={`text-center text-sm mt-4 ${submissions.length >= players.length && players.length > 0 ? 'text-green-400 font-semibold' : 'text-white/50'}`}>
+          {submissions.length >= players.length && players.length > 0 ? 'Everyone voted! ✓' : `Voted! ${submissions.length}/${players.length} in`}
+        </p>
+      )}
+      {isHost && phase === 'submitting' && (
         <button
           onClick={forceSkipToReveal}
-          className="w-full mt-3 bg-white/10 hover:bg-white/20 border border-white/20 text-white font-semibold py-2.5 rounded-xl transition-colors text-sm"
+          disabled={submissions.length === 0}
+          className="w-full mt-3 bg-white/10 hover:bg-white/20 border border-white/20 text-white font-semibold py-2.5 rounded-xl transition-colors text-sm disabled:opacity-30 disabled:cursor-not-allowed"
         >
           Skip to results ({submissions.length}/{players.length}) →
         </button>
