@@ -29,6 +29,7 @@ interface Props {
   participant: Participant
   isHost: boolean
   roomId: string
+  refreshSession?: () => Promise<void>
 }
 
 const GUESS_TIMER = 15   // seconds to guess
@@ -50,7 +51,7 @@ function elapsedSince(iso: string | undefined): number {
   return Math.floor((Date.now() - new Date(iso as string).getTime()) / 1000)
 }
 
-export default function SubmitRevealEngine({ session, game, participant, isHost, roomId }: Props) {
+export default function SubmitRevealEngine({ session, game, participant, isHost, roomId, refreshSession }: Props) {
   const [submissions, setSubmissions] = useState<Submission[]>([])
   const [allParticipants, setAllParticipants] = useState<Participant[]>([])
   const [fieldValues, setFieldValues] = useState<Record<string, string>>({})
@@ -220,6 +221,9 @@ export default function SubmitRevealEngine({ session, game, participant, isHost,
         config: { ...cfg, currentSubmissionIndex: 0, phaseStartedAt: new Date().toISOString() },
       })
       .eq('id', session.id)  // No phase guard — host override always applies
+    // Explicit refetch: if DB was already in 'guessing' (auto-advance won the race but
+    // the realtime event was missed), the update above is a no-op. The refetch syncs state.
+    await refreshSession?.()
   }
 
   const goToNextGuessing = useCallback(async (idx: number) => {

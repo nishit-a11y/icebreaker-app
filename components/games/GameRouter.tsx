@@ -5,7 +5,7 @@
  * This is the single entry point for any active game.
  */
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useCallback } from 'react'
 import { supabase } from '@/lib/supabase'
 import { getGame } from '@/lib/games'
 import type { GameSession, Participant } from '@/types'
@@ -24,6 +24,12 @@ interface Props {
 export default function GameRouter({ gameSessionId, participant, isHost, roomId }: Props) {
   const [session, setSession] = useState<GameSession | null>(null)
   const [allParticipants, setAllParticipants] = useState<Participant[]>([])
+
+  // Explicit refetch — called by engine skip buttons as a fallback for missed realtime events
+  const refreshSession = useCallback(async () => {
+    const { data } = await supabase.from('ib_game_sessions').select('*').eq('id', gameSessionId).single()
+    if (data) setSession(data)
+  }, [gameSessionId])
 
   useEffect(() => {
     // Load session
@@ -63,7 +69,7 @@ export default function GameRouter({ gameSessionId, participant, isHost, roomId 
     return <div className="text-center text-white/60 py-20">Unknown game: {session.game_id}</div>
   }
 
-  const commonProps = { session, game, participant, isHost, roomId }
+  const commonProps = { session, game, participant, isHost, roomId, refreshSession }
 
   if (session.engine === 'submit-reveal') {
     return <SubmitRevealEngine {...commonProps} />

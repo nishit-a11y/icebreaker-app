@@ -21,6 +21,7 @@ interface Props {
   isHost: boolean
   roomId: string
   participants: Participant[]
+  refreshSession?: () => Promise<void>
 }
 
 const PICK_TIMER = 15
@@ -31,7 +32,7 @@ function elapsedSince(iso: string | undefined): number {
   return Math.floor((Date.now() - new Date(iso).getTime()) / 1000)
 }
 
-export default function TimedEngine({ session, game, participant, isHost, roomId, participants }: Props) {
+export default function TimedEngine({ session, game, participant, isHost, roomId, participants, refreshSession }: Props) {
   const [submissions, setSubmissions] = useState<Submission[]>([])
   const [myPick, setMyPick] = useState<string | null>(null)
   const [timeLeft, setTimeLeft] = useState(PICK_TIMER)
@@ -126,6 +127,7 @@ export default function TimedEngine({ session, game, participant, isHost, roomId
     await supabase.from('ib_game_sessions')
       .update({ phase: 'reveal', config: { ...cfg, phaseStartedAt: new Date().toISOString() } })
       .eq('id', session.id)
+    await refreshSession?.()
   }
 
   async function nextRound() {

@@ -21,6 +21,7 @@ interface Props {
   participant: Participant
   isHost: boolean
   roomId: string
+  refreshSession?: () => Promise<void>
 }
 
 const VOTE_TIMER = 20
@@ -31,7 +32,7 @@ function elapsedSince(iso: string | undefined): number {
   return Math.floor((Date.now() - new Date(iso).getTime()) / 1000)
 }
 
-export default function VoteEngine({ session, game, participant, isHost, roomId }: Props) {
+export default function VoteEngine({ session, game, participant, isHost, roomId, refreshSession }: Props) {
   const [submissions, setSubmissions] = useState<Submission[]>([])
   const [allParticipants, setAllParticipants] = useState<Participant[]>([])
   const [myVote, setMyVote] = useState<string | null>(null)
@@ -132,6 +133,7 @@ export default function VoteEngine({ session, game, participant, isHost, roomId 
     await supabase.from('ib_game_sessions')
       .update({ phase: 'reveal', config: { ...cfg, phaseStartedAt: new Date().toISOString() } })
       .eq('id', session.id)
+    await refreshSession?.()
   }
 
   async function nextRound() {
