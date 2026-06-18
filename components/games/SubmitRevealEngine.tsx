@@ -120,7 +120,9 @@ export default function SubmitRevealEngine({ session, game, participant, isHost,
   useEffect(() => {
     if (phase !== 'submitting') return
     const answers = submissions.filter(s => s.round_number !== -1)
-    if (answers.length >= players.length && players.length > 0 && !advancedRef.current) {
+    // Count only non-host answers for the threshold — host answering should not trigger advance
+    const nonHostAnswers = answers.filter(a => players.some(p => p.id === a.participant_id))
+    if (nonHostAnswers.length >= players.length && players.length > 0 && !advancedRef.current) {
       advancedRef.current = true
       advanceToGuessing(answers, 0)
     }
@@ -353,11 +355,12 @@ export default function SubmitRevealEngine({ session, game, participant, isHost,
 
   // ── SUBMITTING ────────────────────────────────────────────────────────────
   if (phase === 'submitting') {
-    const submitCount = answers.length
+    // Only count non-host answers — host submitting should not affect the threshold
+    const submitCount = answers.filter(a => players.some(p => p.id === a.participant_id)).length
     const totalPlayers = players.length
+    const allAnswered = submitCount >= totalPlayers && totalPlayers > 0
 
     if (mySubmission) {
-      const allAnswered = submitCount >= totalPlayers && totalPlayers > 0
       return (
         <div className="flex flex-col items-center justify-center min-h-[60vh] text-center px-6">
           <div className="text-5xl mb-4">✅</div>
@@ -379,16 +382,21 @@ export default function SubmitRevealEngine({ session, game, participant, isHost,
               )
             })}
           </div>
-          {allAnswered ? (
-            <p className="text-white/60 text-sm animate-pulse">🚀 Starting game…</p>
-          ) : isHost && answers.length > 0 ? (
+          {allAnswered && <p className="text-white/60 text-sm animate-pulse mb-3">🚀 Starting game…</p>}
+          {isHost && (
             <button
               onClick={forceStartGuessing}
-              className="bg-yellow-400 hover:bg-yellow-300 text-gray-900 font-bold px-6 py-3 rounded-xl transition-colors text-sm"
+              disabled={answers.length === 0}
+              className={`font-bold px-6 py-3 rounded-xl transition-colors text-sm disabled:opacity-30 disabled:cursor-not-allowed ${
+                allAnswered
+                  ? 'bg-white/10 hover:bg-white/20 text-white border border-white/20'
+                  : 'bg-yellow-400 hover:bg-yellow-300 text-gray-900'
+              }`}
             >
-              Start game now ({submitCount}/{totalPlayers}) →
+              {allAnswered ? 'Start game now →' : `Start game now (${submitCount}/${totalPlayers}) →`}
             </button>
-          ) : (
+          )}
+          {!isHost && !allAnswered && (
             <p className="text-white/30 text-xs">Game starts automatically when everyone answers</p>
           )}
         </div>
@@ -440,7 +448,7 @@ export default function SubmitRevealEngine({ session, game, participant, isHost,
           </button>
         )}
 
-        <p className="text-center text-white/30 text-xs mt-4">
+        <p className="text-center text-white/30 text-xs mt-3">
           {submitCount} of {totalPlayers} answered
         </p>
       </div>
